@@ -1,0 +1,33 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Sorties de montage (lourdes, régénérables)
+montage*.mp4
+*.mp4
+work/
+run/
+critique/
+storyboard*.json
+projects/
+
+# Modèles IA (téléchargés séparément, plusieurs Go)
+Models/
+*.safetensors
+*.gguf
+*.onnx
+
+# Caches
+.scene_cache.json
+.ai_cache.json
+*.DS_Store
+
+# Notes internes de dev (non publiées)
+CLAUDE.md
+critique/
+
+# Garder les pistes musicales mais pas d'éventuels gros médias de test
+test_louison_input/
+test_image.jpg

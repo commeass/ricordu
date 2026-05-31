@@ -1,0 +1,379 @@
+[
+  {
+    "title": "Carefree",
+    "file": "music/Carefree.mp3",
+    "mood": "joyeux",
+    "tags": [
+      "anniversaire",
+      "enfants",
+      "famille"
+    ],
+    "bpm": 96,
+    "duration": 205
+  },
+  {
+    "title": "Happy Bee",
+    "file": "music/HappyBee.mp3",
+    "mood": "joyeux",
+    "tags": [
+      "anniversaire",
+      "enfants",
+      "fete"
+    ],
+    "bpm": 123,
+    "duration": 302
+  },
+  {
+    "title": "Fluffing a Duck",
+    "file": "music/FluffingADuck.mp3",
+    "mood": "joyeux",
+    "tags": [
+      "enfants",
+      "anniversaire",
+      "drole"
+    ],
+    "bpm": 81,
+    "duration": 67
+  },
+  {
+    "title": "Monkeys Spinning Monkeys",
+    "file": "music/MonkeysSpinningMonkeys.mp3",
+    "mood": "fun",
+    "tags": [
+      "enfants",
+      "drole",
+      "jeux"
+    ],
+    "bpm": 144,
+    "duration": 125
+  },
+  {
+    "title": "Touching Moments Four",
+    "file": "music/TouchingMoments.mp3",
+    "mood": "tendre",
+    "tags": [
+      "mariage",
+      "famille",
+      "souvenir",
+      "bebe"
+    ],
+    "bpm": 123,
+    "duration": 109
+  },
+  {
+    "title": "Dreams Become Real",
+    "file": "music/DreamsBecomeReal.mp3",
+    "mood": "tendre",
+    "tags": [
+      "mariage",
+      "souvenir",
+      "famille"
+    ],
+    "bpm": 152,
+    "duration": 410
+  },
+  {
+    "title": "Heroic Age",
+    "file": "music/HeroicAge.mp3",
+    "mood": "epique",
+    "tags": [
+      "voyage",
+      "sport",
+      "aventure"
+    ],
+    "bpm": 129,
+    "duration": 97
+  },
+  {
+    "title": "Inspired",
+    "file": "music/Inspired.mp3",
+    "mood": "epique",
+    "tags": [
+      "voyage",
+      "reussite",
+      "aventure"
+    ],
+    "bpm": 117,
+    "duration": 286
+  },
+  {
+    "title": "Local Forecast Elevator",
+    "file": "music/LocalForecast.mp3",
+    "mood": "chill",
+    "tags": [
+      "vacances",
+      "balade",
+      "quotidien"
+    ],
+    "bpm": 108,
+    "duration": 189
+  },
+  {
+    "title": "Itty Bitty 8 Bit",
+    "file": "music/IttyBitty8Bit.mp3",
+    "mood": "fun",
+    "tags": [
+      "jeux",
+      "enfants",
+      "retro"
+    ],
+    "bpm": 108,
+    "duration": 194
+  },
+  {
+    "title": "Cheery Monday",
+    "file": "music/CheeryMonday.mp3",
+    "mood": "joyeux",
+    "tags": [
+      "enfants",
+      "fete",
+      "anniversaire"
+    ],
+    "bpm": 103,
+    "duration": 80
+  },
+  {
+    "title": "Pixelland",
+    "file": "music/Pixelland.mp3",
+    "mood": "joyeux",
+    "tags": [
+      "enfants",
+      "jeux",
+      "drole"
+    ],
+    "bpm": 117,
+    "duration": 234
+  },
+  {
+    "title": "Wallpaper",
+    "file": "music/Wallpaper.mp3",
+    "mood": "joyeux",
+    "tags": [
+      "balade",
+      "quotidien"
+    ],
+    "bpm": 92,
+    "duration": 220
+  },
+  {
+    "title": "The Cannery",
+    "file": "music/TheCannery.mp3",
+    "mood": "joyeux",
+    "tags": [
+      "entrain",
+      "fete"
+    ],
+    "bpm": 89,
+    "duration": 182
+  },
+  {
+    "title": "Sneaky Snitch",
+    "file": "music/SneakySnitch.mp3",
+    "mood": "fun",
+    "tags": [
+      "drole",
+      "jeux"
+    ],
+    "bpm": 86,
+    "duration": 137
+  },
+  {
+    "title": "Scheming Weasel faster",
+    "file": "music/SchemingWeaselfaster.mp3",
+    "mood": "fun",
+    "tags": [
+      "drole",
+      "enfants"
+    ],
+    "bpm": 172,
+    "duration": 89
+  },
+  {
+    "title": "Run Amok",
+    "file": "music/RunAmok.mp3",
+    "mood": "fun",
+    "tags": [
+      "course",
+      "jeux"
+    ],
+    "bpm": 74,
+    "duration": 107
+  },
+  {
+    "title": "Beachfront Celebration",
+    "file": "music/BeachfrontCelebration.mp3",
+    "mood": "fun",
+    "tags": [
+      "vacances",
+      "fete"
+    ],
+    "bpm": 60,
+    "duration": 187
+  },
+  {
+    "title": "Hard Boiled",
+    "file": "music/HardBoiled.mp3",
+    "mood": "fun",
+    "tags": [
+      "groove",
+      "cool"
+    ],
+    "bpm": 63,
+    "duration": 181
+  },
+  {
+    "title": "Heartwarming",
+    "file": "music/Heartwarming.mp3",
+    "mood": "tendre",
+    "tags": [
+      "famille",
+      "bebe",
+      "souvenir"
+    ],
+    "bpm": 161,
+    "duration": 72
+  },
+  {
+    "title": "Sad Trio",
+    "file": "music/SadTrio.mp3",
+    "mood": "tendre",
+    "tags": [
+      "emotion",
+      "souvenir"
+    ],
+    "bpm": 68,
+    "duration": 252
+  },
+  {
+    "title": "Despair and Triumph",
+    "file": "music/DespairandTriumph.mp3",
+    "mood": "epique",
+    "tags": [
+      "voyage",
+      "reussite"
+    ],
+    "bpm": 36,
+    "duration": 286
+  },
+  {
+    "title": "Heart of Nowhere",
+    "file": "music/HeartofNowhere.mp3",
+    "mood": "epique",
+    "tags": [
+      "voyage",
+      "aventure"
+    ],
+    "bpm": 108,
+    "duration": 172
+  },
+  {
+    "title": "Rising Tide",
+    "file": "music/RisingTide.mp3",
+    "mood": "epique",
+    "tags": [
+      "sport",
+      "aventure"
+    ],
+    "bpm": 108,
+    "duration": 277
+  },
+  {
+    "title": "Five Armies",
+    "file": "music/FiveArmies.mp3",
+    "mood": "epique",
+    "tags": [
+      "epique",
+      "aventure"
+    ],
+    "bpm": 112,
+    "duration": 156
+  },
+  {
+    "title": "Volatile Reaction",
+    "file": "music/VolatileReaction.mp3",
+    "mood": "epique",
+    "tags": [
+      "sport",
+      "intense"
+    ],
+    "bpm": 152,
+    "duration": 165
+  },
+  {
+    "title": "Lobby Time",
+    "file": "music/LobbyTime.mp3",
+    "mood": "chill",
+    "tags": [
+      "quotidien",
+      "balade"
+    ],
+    "bpm": 129,
+    "duration": 193
+  },
+  {
+    "title": "Brittle Rille",
+    "file": "music/BrittleRille.mp3",
+    "mood": "chill",
+    "tags": [
+      "vacances",
+      "calme"
+    ],
+    "bpm": 89,
+    "duration": 229
+  },
+  {
+    "title": "Easy Lemon",
+    "file": "music/EasyLemon.mp3",
+    "mood": "chill",
+    "tags": [
+      "quotidien",
+      "cool"
+    ],
+    "bpm": 81,
+    "duration": 126
+  },
+  {
+    "title": "Sneaky Adventure",
+    "file": "music/SneakyAdventure.mp3",
+    "mood": "chill",
+    "tags": [
+      "balade",
+      "drole"
+    ],
+    "bpm": 108,
+    "duration": 73
+  },
+  {
+    "title": "Bossa Antigua",
+    "file": "music/BossaAntigua.mp3",
+    "mood": "chill",
+    "tags": [
+      "vacances",
+      "lounge"
+    ],
+    "bpm": 144,
+    "duration": 283
+  },
+  {
+    "title": "Funkorama",
+    "file": "music/Funkorama.mp3",
+    "mood": "groove",
+    "tags": [
+      "fete",
+      "danse"
+    ],
+    "bpm": 99,
+    "duration": 201
+  },
+  {
+    "title": "Off to Osaka",
+    "file": "music/OfftoOsaka.mp3",
+    "mood": "groove",
+    "tags": [
+      "voyage",
+      "cool"
+    ],
+    "bpm": 117,
+    "duration": 110
+  }
+]

@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Montage — Souvenirs locaux</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Montage</h1>
+    <span class="sub">souvenirs, en local</span>
+    <span class="dot">100% local · aucune image en ligne</span>
+  </header>
+
+  <!-- Projets sauvegardés -->
+  <div class="card" id="projCard" style="display:none">
+    <h2>Projets sauvegardés</h2>
+    <div id="projList"></div>
+  </div>
+
+  <!-- 1. Dossier -->
+  <div class="card">
+    <h2><span class="step"><span class="n">1</span> Dossier de l'événement</span></h2>
+    <div class="folder">
+      <div class="path empty" id="folderPath">Aucun dossier choisi</div>
+      <button class="btn" id="pickBtn">Choisir un dossier…</button>
+    </div>
+  </div>
+
+  <!-- 2. Options -->
+  <div class="card">
+    <h2><span class="step"><span class="n">2</span> Options du montage</span></h2>
+    <div class="grid">
+      <div class="opt" style="grid-column:1/-1">
+        <label>Titre — écrit sur la 1re photo</label>
+        <input type="text" id="title" class="tin" placeholder="Anniversaire Louison">
+      </div>
+      <div class="opt" style="grid-column:1/-1">
+        <label>Texte de fin — écrit sur la dernière photo (défaut : le titre)</label>
+        <input type="text" id="endtext" class="tin" placeholder="Merci · À l'année prochaine…">
+      </div>
+      <div class="opt">
+        <label>Durée cible · <span class="val" id="durVal">2:30</span></label>
+        <input type="range" id="dur" min="30" max="240" step="5" value="150">
+      </div>
+      <div class="opt">
+        <label>Rythme des coupes</label>
+        <div class="seg" id="rhythm">
+          <button data-v="4" class="on">Doux</button>
+          <button data-v="2">Punchy</button>
+          <button data-v="1">Chaque beat</button>
+          <button data-v="dyn">Dynamique</button>
+          <button data-v="module">Module ♫</button>
+          <button data-v="recit">Récit ♥</button>
+        </div>
+        <div class="muted" style="margin-top:8px;font-size:12px">Dynamique = accélère au milieu · Module = sections + la musique change (≥2 musiques) · <b>Récit</b> = monte vers le moment fort (gâteau/bougies), le tient, puis relâche</div>
+      </div>
+      <div class="opt">
+        <label>Moments vidéo · <span class="val" id="vidVal">30%</span></label>
+        <input type="range" id="vid" min="0" max="60" step="5" value="30">
+      </div>
+      <div class="opt">
+        <label>Ordre</label>
+        <div class="seg" id="order">
+          <button data-v="chrono" class="on">Chronologique</button>
+          <button data-v="scene">Par scène (IA)</button>
+        </div>
+      </div>
+      <div class="opt">
+        <label>Finesse des scènes · <span class="val" id="sceneVal">0.50</span></label>
+        <input type="range" id="scenethr" min="0.30" max="0.70" step="0.05" value="0.50">
+        <div class="muted" style="margin-top:6px;font-size:12px">Mode « Par scène » : regroupe les plans d'une même scène (DINOv2 + couleur). + bas = scènes + fines</div>
+      </div>
+      <div class="opt toggle">
+        <div class="switch" id="capSw"><i></i></div>
+        <label style="margin:0">Afficher les légendes IA</label>
+      </div>
+      <div class="opt toggle">
+        <div class="switch on" id="hwSw"><i></i></div>
+        <label style="margin:0">Accélération matérielle (rapide)</label>
+      </div>
+      <div class="opt" style="grid-column:1/-1">
+        <label>Quand une vidéo a du son</label>
+        <div class="seg" id="videoaudio">
+          <button data-v="cut" class="on">Couper la musique</button>
+          <button data-v="duck">La baisser (garder le fond)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. Musique -->
+  <div class="card">
+    <h2><span class="step"><span class="n">3</span> Musique <span class="muted" id="musicHint"></span></span></h2>
+    <div class="moods" id="moods"></div>
+    <div class="mbudget" id="musicBudget"></div>
+    <div class="tracks" id="tracks"></div>
+  </div>
+
+  <button class="btn-primary" id="runBtn" disabled>Créer le montage</button>
+
+  <!-- Progression -->
+  <div class="card" id="progress">
+    <h2>Progression</h2>
+    <div class="stepper" id="stepper">
+      <div class="s" data-s="scan">Scan</div>
+      <div class="s" data-s="ai">Analyse IA</div>
+      <div class="s" data-s="render">Rendu</div>
+    </div>
+    <div class="bar"><i id="barFill"></i></div>
+    <div class="detail" id="detail"></div>
+    <div class="log" id="log"></div>
+  </div>
+
+  <!-- Rapports -->
+  <div id="reports"></div>
+
+  <!-- Éditeur de sélection -->
+  <div id="editor"></div>
+
+  <audio id="audio"></audio>
+
+  <!-- Découpe manuelle d'un extrait vidéo -->
+  <div id="cutmodal" class="modal">
+    <div class="mbox">
+      <video id="cutvid" controls playsinline></video>
+      <div class="cutbar">
+        <button class="btn" id="markIn">◖ Marquer début</button>
+        <button class="btn" id="markOut">Marquer fin ◗</button>
+        <span class="muted" id="cutrange">scrub la vidéo, puis marque début / fin</span>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button class="btn-primary" id="addClip" style="flex:1">Ajouter l'extrait</button>
+        <button class="btn" id="cutClose">Fermer</button>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
