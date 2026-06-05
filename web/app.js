@@ -1,6 +1,6 @@
 const $ = s => document.querySelector(s);
 const state = { folder:null, event:"", beats:4, rhythm:"fixe", order:"chrono", captions:false, hw:true,
-                videoAudio:"cut", sceneThr:0.5, endPhoto:null, catalog:[], selected:new Set(), suggested:new Set(), mood:"tous" };
+                videoAudio:"cut", sceneThr:0.5, endPhoto:null, catalog:[], selected:new Set(), suggested:new Set(), mood:"tous", manualOrder:false };
 
 // ---- helpers ----
 const fmtDur = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
@@ -12,7 +12,12 @@ function seg(el, cb){ el.querySelectorAll("button").forEach(b=>b.onclick=()=>{
 $("#dur").oninput = e => { $("#durVal").textContent = fmtDur(+e.target.value); updateMusicBudget(); };
 $("#vid").oninput = e => $("#vidVal").textContent = e.target.value + "%";
 $("#scenethr").oninput = e => { state.sceneThr = +e.target.value; $("#sceneVal").textContent = (+e.target.value).toFixed(2); };
-seg($("#rhythm"), v => { if(v==="dyn"){ state.rhythm="dynamique"; } else if(v==="module"){ state.rhythm="module"; } else if(v==="recit"){ state.rhythm="recit"; } else { state.rhythm="fixe"; state.beats=+v; } updateMusicBudget(); });
+seg($("#rhythm"), v => { if(v==="dyn"){ state.rhythm="dynamique"; } else if(v==="module"){ state.rhythm="module"; } else if(v==="recit"){ state.rhythm="recit"; } else if(v==="song"){ state.rhythm="song"; calerSurMusique(); } else { state.rhythm="fixe"; state.beats=+v; } updateMusicBudget(); });
+function calerSurMusique(){   // mode « Sur la musique » : la durée du montage = la chanson
+  if(!state.selected.size) return;
+  const v = Math.max(30, Math.min(240, Math.round(musicAvail() - TITLE_END)));
+  $("#dur").value = v; $("#durVal").textContent = fmtDur(v);
+}
 seg($("#order"),  v => state.order = v);
 seg($("#videoaudio"), v => state.videoAudio = v);
 $("#capSw").onclick = () => { state.captions=!state.captions; $("#capSw").classList.toggle("on", state.captions); };
@@ -41,24 +46,29 @@ $("#pickBtn").onclick = async () => {
 async function loadCatalog(){
   const r = await (await fetch("/api/catalog")).json();
   state.catalog = r.tracks;
-  const moods = ["tous", ...new Set(r.tracks.map(t=>t.mood))];
-  $("#moods").innerHTML = moods.map(m=>`<div class="chip ${m==='tous'?'on':''}" data-m="${m}">${m}</div>`).join("");
+  renderMoods(); renderTracks();
+}
+function renderMoods(){
+  const moods = ["tous", ...new Set(state.catalog.map(t=>t.mood))];
+  $("#moods").innerHTML = moods.map(m=>`<div class="chip ${m===state.mood?'on':''}" data-m="${m}">${MOOD_LABEL[m]||m}</div>`).join("");
   $("#moods").querySelectorAll(".chip").forEach(c=>c.onclick=()=>{
     state.mood=c.dataset.m; $("#moods").querySelectorAll(".chip").forEach(x=>x.classList.remove("on"));
     c.classList.add("on"); renderTracks();
   });
-  renderTracks();
 }
-const MOOD_LABEL={joyeux:"Joyeux",fun:"Fun",tendre:"Tendre",epique:"Épique",chill:"Chill"};
+const MOOD_LABEL={joyeux:"Joyeux",fun:"Fun",tendre:"Tendre",epique:"Épique",chill:"Chill",groove:"Groove",perso:"Perso ★"};
 function renderTracks(){
   const list = state.catalog.filter(t=>state.mood==="tous"||t.mood===state.mood);
   $("#tracks").innerHTML = list.map(t=>{
     const sel=state.selected.has(t.file), sug=state.suggested.has(t.file);
+    const badge = t.perso ? '<span class="badge perso">perso</span>'
+                          : (sug?'<span class="badge">suggéré</span>':'');
+    const bpm = t.bpm ? ` · ${t.bpm} BPM` : '';
     return `<div class="track ${sel?'sel':''}" data-f="${t.file}">
-      ${sug?'<span class="badge">suggéré</span>':''}
+      ${badge}
       <button class="play" data-f="${t.file}">▶</button>
       <div class="meta"><div class="t">${t.title}</div>
-        <div class="s">${MOOD_LABEL[t.mood]||t.mood} · ${t.bpm} BPM · <b>${fmtDur(t.duration||0)}</b></div></div>
+        <div class="s">${MOOD_LABEL[t.mood]||t.mood}${bpm} · <b>${fmtDur(t.duration||0)}</b></div></div>
       <span class="check">✓</span></div>`;
   }).join("");
   $("#tracks").querySelectorAll(".track").forEach(el=>{
@@ -100,6 +110,15 @@ function updateMusicBudget(){
         la contrainte de durée globale ne s'applique pas. Durées : <b>${list}</b>.</div>`;
     return;
   }
+  if(state.rhythm==="song"){
+    const pn = n>1 ? ` (${n} pistes, fondus −${XFADE*(n-1)}s)` : "";
+    el.className="mbudget show ok";
+    el.innerHTML=`<div class="mb-top"><span class="mb-ico">🎬</span>
+        <span class="mb-head">Le montage épouse la chanson</span></div>
+      <div class="mb-bar"><div class="mb-fill" style="width:100%"></div></div>
+      <div class="mb-msg">Durée calée sur <b>${fmtDur(avail)}</b> de musique${pn}, et le <b>rythme des coupes suit l'énergie</b> du morceau : intro posée → refrain qui claque. Les plans tombent sur les temps.</div>`;
+    return;
+  }
   const deficit = montage - avail;                          // >0 = il manque de la musique
   const pistes = n>1 ? ` (${n} pistes, fondus −${XFADE*(n-1)}s)` : "";
   if(deficit <= 0){
@@ -124,6 +143,33 @@ function updateMusicBudget(){
     if(fix) fix.onclick = ()=>{ $("#dur").value=fit; $("#durVal").textContent=fmtDur(fit); updateMusicBudget(); };
   }
 }
+
+// ---- ajouter sa musique : import fichier / lien YouTube ----
+function amStatus(m){ const e=$("#amStatus"); if(e) e.textContent=m; }
+function addPersoTrack(t){
+  if(!state.catalog.find(x=>x.file===t.file)) state.catalog.unshift(t);
+  state.selected.add(t.file);
+  state.mood="tous";
+  renderMoods(); renderTracks();   // renderTracks rappelle updateMusicBudget
+  amStatus(`✓ « ${t.title} » ajoutée et sélectionnée (${fmtDur(t.duration||0)})`);
+}
+if($("#musicFile")) $("#musicFile").onchange = async e => {
+  const f=e.target.files[0]; if(!f) return;
+  amStatus(`⬆️ Import de « ${f.name} »…`);
+  const fd=new FormData(); fd.append("file", f);
+  try{ const r=await (await fetch("/api/upload-music",{method:"POST",body:fd})).json();
+       if(r.error) amStatus("⚠️ "+r.error); else addPersoTrack(r.track);
+  }catch(err){ amStatus("⚠️ échec de l'import"); }
+  e.target.value="";
+};
+if($("#ytAdd")) $("#ytAdd").onclick = async () => {
+  const url=$("#ytUrl").value.trim(); if(!url){ amStatus("Colle un lien YouTube d'abord."); return; }
+  amStatus("⏬ Téléchargement de l'audio… (10–30 s)"); $("#ytAdd").disabled=true;
+  try{ const r=await (await fetch("/api/youtube-music",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url})})).json();
+       if(r.error) amStatus("⚠️ "+r.error); else { addPersoTrack(r.track); $("#ytUrl").value=""; }
+  }catch(err){ amStatus("⚠️ échec du téléchargement"); }
+  $("#ytAdd").disabled=false;
+};
 
 // ---- run ----
 $("#runBtn").onclick = () => {
@@ -248,8 +294,9 @@ function loadSelection(){
       ? `<div class="moods" id="dayf"><div class="chip on" data-d="tous">tous les jours</div>`
         + days.map(dd=>`<div class="chip" data-d="${dd}">${dd}</div>`).join("") + `</div>` : "";
     const esc=s=>(s||'').replace(/"/g,'&quot;');
-    const cells = d.clips.map(c=>`
-      <div class="cell ${c.include?'on':''} ${c.file===state.endPhoto?'endsel':''}" data-id="${c.id}" data-day="${(c.when||'').slice(0,5)}" data-file="${esc(c.file)}">
+    state.manualOrder = false;     // l'ordre fraîchement chargé fait foi
+    const cells = d.clips.map((c,i)=>`
+      <div class="cell ${c.include?'on':''} ${c.file===state.endPhoto?'endsel':''}" draggable="true" data-id="${c.id}" data-ord="${i}" data-day="${(c.when||'').slice(0,5)}" data-file="${esc(c.file)}">
         <img loading="lazy" src="${c.thumb}">
         <span class="sc">${c.score}</span>
         ${c.when?`<span class="when">${c.when}</span>`:''}
@@ -259,8 +306,9 @@ function loadSelection(){
         :`<button class="endbtn" title="Choisir comme photo de fin">🏁 fin</button>`}
         <span class="tick">✓</span></div>`).join("");
     $("#editor").innerHTML = `<div class="card">
-      <h2>Sélection — clique pour inclure / exclure <span class="muted" id="selCount"></span></h2>
-      <div class="muted" style="margin-bottom:14px">Ordre chronologique (heure affichée sur chaque vignette). ▶ visionne l'extrait sur place. Ajuste puis relance.</div>
+      <h2>Sélection — clique pour inclure / exclure · glisse pour réordonner <span class="muted" id="selCount"></span></h2>
+      <div class="muted" style="margin-bottom:14px">Heure affichée sur chaque vignette. ▶ visionne l'extrait. <b>Glisse-dépose</b> une vignette pour changer l'ordre du montage. Ajuste puis relance.</div>
+      <div id="orderBanner" class="ordbanner" style="display:none">✋ <b>Ordre manuel</b> — le montage suivra l'ordre que tu as défini. <button class="btn" id="orderReset">↺ Ordre auto</button></div>
       ${dayChips}
       <div class="cells">${cells}</div>
       <div style="display:flex;gap:12px;margin-top:20px">
@@ -286,9 +334,45 @@ function loadSelection(){
       const sel=ch.dataset.d;
       $("#editor").querySelectorAll(".cell").forEach(el=>el.style.display=(sel==="tous"||el.dataset.day===sel)?"":"none");
     });
+    enableDragReorder();
+    if($("#orderReset")) $("#orderReset").onclick=resetOrder;
     $("#redo").onclick=redo; $("#saveProj").onclick=saveProject; selCount();
     $("#editor").scrollIntoView({behavior:"smooth"});
   });
+}
+
+// ---- réordonner les plans à la main (glisser-déposer) ----
+let _dragEl=null;
+function enableDragReorder(){
+  const grid=$("#editor .cells"); if(!grid) return;
+  grid.querySelectorAll(".cell").forEach(cell=>{
+    cell.addEventListener("dragstart",e=>{ _dragEl=cell; cell.classList.add("dragging"); e.dataTransfer.effectAllowed="move"; });
+    cell.addEventListener("dragend",()=>{ if(_dragEl)_dragEl.classList.remove("dragging"); _dragEl=null; });
+  });
+  grid.addEventListener("dragover",e=>{
+    if(!_dragEl) return; e.preventDefault();
+    const t=dragTarget(grid,e.clientX,e.clientY); if(!t||t.el===_dragEl) return;
+    if(t.after) t.el.after(_dragEl); else t.el.before(_dragEl);
+    markManualOrder();
+  });
+}
+function dragTarget(grid,x,y){            // vignette dont le centre est le plus proche du curseur
+  let best=null,bd=Infinity,after=false;
+  grid.querySelectorAll(".cell:not(.dragging)").forEach(el=>{
+    if(el.style.display==="none") return;
+    const r=el.getBoundingClientRect(), cx=r.left+r.width/2, cy=r.top+r.height/2;
+    const d=Math.hypot(x-cx,y-cy);
+    if(d<bd){ bd=d; best=el; after=(y>cy+r.height*0.25)||(Math.abs(y-cy)<=r.height/2 && x>cx); }
+  });
+  return best?{el:best,after}:null;
+}
+function markManualOrder(){
+  if(!state.manualOrder){ state.manualOrder=true; const b=$("#orderBanner"); if(b)b.style.display="flex"; }
+}
+function resetOrder(){
+  const grid=$("#editor .cells"); if(!grid) return;
+  [...grid.querySelectorAll(".cell")].sort((a,b)=>(+a.dataset.ord)-(+b.dataset.ord)).forEach(el=>grid.appendChild(el));
+  state.manualOrder=false; const b=$("#orderBanner"); if(b)b.style.display="none";
 }
 function selCount(){ const on=document.querySelectorAll(".cell.on").length, t=document.querySelectorAll(".cell").length;
   const e=$("#selCount"); if(e) e.textContent=`· ${on}/${t} retenus`; }
@@ -297,14 +381,17 @@ function markEndPhoto(file){
   document.querySelectorAll(".cell").forEach(el=>el.classList.toggle("endsel", el.dataset.file===state.endPhoto));
 }
 function redo(){
-  const inc={}; document.querySelectorAll(".cell").forEach(el=>inc[el.dataset.id]=el.classList.contains("on"));
+  const cells=[...document.querySelectorAll(".cell")];
+  const inc={}; cells.forEach(el=>inc[el.dataset.id]=el.classList.contains("on"));
+  const order_ids = cells.map(el=>+el.dataset.id);     // ordre actuel des vignettes
   $("#redo").disabled=true; $("#redo").textContent="Re-montage…";
   $("#reports").innerHTML=""; $("#progress").style.display="block"; setStep("render",false);
   $("#barFill").style.width="70%"; $("#progress").scrollIntoView({behavior:"smooth"});
   fetch("/api/reselect",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({includes:inc, title:$("#title").value.trim(),
       end_text:$("#endtext").value.trim(), end_photo:state.endPhoto,
-      rhythm:state.rhythm, beats_per_clip:state.beats, order:state.order,
+      rhythm:state.rhythm, beats_per_clip:state.beats,
+      order: state.manualOrder ? "manual" : state.order, order_ids,
       captions:state.captions, hardware_accel:state.hw, video_audio:state.videoAudio,
       scene_threshold_ai:state.sceneThr, music:[...state.selected]})})
     .then(r=>r.json()).then(r=>{ if(r.error){alert(r.error);$("#redo").disabled=false;$("#redo").textContent="Relancer le montage";} else listen(); });

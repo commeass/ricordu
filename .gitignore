@@ -28,6 +28,9 @@ Models/
 CLAUDE.md
 critique/
 
+# Musiques importées / téléchargées par l'utilisateur (perso, droits d'auteur) — hors dépôt
+music/perso/
+
 # Garder les pistes musicales mais pas d'éventuels gros médias de test
 test_louison_input/
 test_image.jpg

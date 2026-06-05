@@ -52,10 +52,11 @@
           <button data-v="2">Punchy</button>
           <button data-v="1">Chaque beat</button>
           <button data-v="dyn">Dynamique</button>
+          <button data-v="song">Sur la musique ♬</button>
           <button data-v="module">Module ♫</button>
           <button data-v="recit">Récit ♥</button>
         </div>
-        <div class="muted" style="margin-top:8px;font-size:12px">Dynamique = accélère au milieu · Module = sections + la musique change (≥2 musiques) · <b>Récit</b> = monte vers le moment fort (gâteau/bougies), le tient, puis relâche</div>
+        <div class="muted" style="margin-top:8px;font-size:12px">Dynamique = accélère au milieu · <b>Sur la musique</b> = le montage épouse la chanson (durée + coupes calées sur l'énergie : intro posée, refrain qui claque) · Module = sections + la musique change (≥2 musiques) · <b>Récit</b> = monte vers le moment fort, le tient, puis relâche</div>
       </div>
       <div class="opt">
         <label>Moments vidéo · <span class="val" id="vidVal">30%</span></label>
@@ -97,6 +98,18 @@
     <div class="moods" id="moods"></div>
     <div class="mbudget" id="musicBudget"></div>
     <div class="tracks" id="tracks"></div>
+    <div class="addmusic">
+      <div class="amrow">
+        <label class="btn amfile">⬆️ Importer un fichier
+          <input type="file" id="musicFile" accept="audio/*" hidden>
+        </label>
+        <div class="amyt">
+          <input type="text" id="ytUrl" class="tin" placeholder="…ou coller un lien YouTube">
+          <button class="btn" id="ytAdd">Ajouter</button>
+        </div>
+      </div>
+      <div class="muted amstatus" id="amStatus">Ajoute ta propre musique. Usage personnel — respecte les droits d'auteur si tu partages le montage.</div>
+    </div>
   </div>
 
   <button class="btn-primary" id="runBtn" disabled>Créer le montage</button>

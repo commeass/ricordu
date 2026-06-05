@@ -7,9 +7,9 @@ gère la bibliothèque musicale et suggère des musiques selon l'événement.
 Lancer :  ./ui.sh   (ou : .venv/bin/uvicorn app:app --port 8723)
 Tout tourne en local. Aucune donnée ne sort de la machine.
 """
-import os, sys, json, time, queue, threading, subprocess, io, re
+import os, sys, json, time, queue, threading, subprocess, io, re, shutil, asyncio
 from urllib.parse import quote
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -49,9 +49,34 @@ def job_busy():
 def slug(s): return re.sub(r"[^a-zA-Z0-9_-]+", "_", s)[:60]
 
 # ----------------------------------------------------------------- musique
+PERSO = os.path.join(BASE, "music", "perso")   # musiques importées / YouTube (hors dépôt git)
+_AUDIO_EXT = (".mp3", ".m4a", ".wav", ".aac", ".flac", ".ogg")
+
+def _probe_dur(path):
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                        "-of", "default=nw=1:nk=1", path], capture_output=True, text=True)
+    try: return round(float(r.stdout.strip()))
+    except Exception: return 0
+
+def _safe_name(name):
+    base = os.path.splitext(os.path.basename(name or ""))[0]
+    base = re.sub(r"[^\w\- ]+", "", base, flags=re.U).strip().replace(" ", "_")
+    return (base[:60] or "musique")
+
+def _track_entry(path):
+    rel = os.path.relpath(path, BASE)
+    return {"title": os.path.splitext(os.path.basename(path))[0], "file": rel,
+            "mood": "perso", "bpm": None, "duration": _probe_dur(path), "perso": True}
+
+def perso_tracks():
+    if not os.path.isdir(PERSO): return []
+    return [_track_entry(os.path.join(PERSO, fn)) for fn in sorted(os.listdir(PERSO))
+            if fn.lower().endswith(_AUDIO_EXT) and not fn.startswith(".")]
+
 def catalog():
     p = os.path.join(BASE, "music", "catalog.json")
-    return json.load(open(p)) if os.path.exists(p) else []
+    base = json.load(open(p)) if os.path.exists(p) else []
+    return perso_tracks() + base   # les musiques perso d'abord
 
 # mots-clés d'événement -> ambiances classées par pertinence
 MOOD_RULES = [
@@ -262,6 +287,13 @@ def run_reselect(includes, opts):
         for c in d["clips"]:
             cid = str(c.get("id"))
             if cid in includes: c["include"] = bool(includes[cid])
+        if opts.get("order") == "manual" and opts.get("order_ids"):     # ordre manuel (glisser-déposer)
+            rank = {str(i): n for n, i in enumerate(opts["order_ids"])}
+            for c in d["clips"]:
+                c["manual_rank"] = rank.get(str(c.get("id")), 10**6)
+        elif opts.get("order") is not None:                             # retour à un ordre auto -> on efface le manuel
+            for c in d["clips"]:
+                c.pop("manual_rank", None)
         json.dump(d, open(sb_path, "w"), indent=2, ensure_ascii=False)
         render_stage(sb_path)
     except Exception as e:
@@ -272,6 +304,77 @@ def run_reselect(includes, opts):
 @app.get("/api/catalog")
 def api_catalog():
     return {"tracks": catalog()}
+
+def _to_mp3(src, dst):
+    """Transcode n'importe quel audio en MP3 192k (compatible navigateur + pipeline)."""
+    subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", src, "-vn",
+                    "-c:a", "libmp3lame", "-q:a", "3", dst],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return os.path.exists(dst)
+
+def _unique_mp3(name):
+    os.makedirs(PERSO, exist_ok=True)
+    dst = os.path.join(PERSO, f"{name}.mp3"); i = 1
+    while os.path.exists(dst):
+        dst = os.path.join(PERSO, f"{name}_{i}.mp3"); i += 1
+    return dst
+
+@app.post("/api/upload-music")
+async def api_upload_music(file: UploadFile = File(...)):
+    """Importer un fichier audio depuis l'ordinateur -> music/perso/ (transcodé en mp3)."""
+    os.makedirs(PERSO, exist_ok=True)
+    tmp = os.path.join(PERSO, ".tmp_upload")
+    with open(tmp, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    dst = _unique_mp3(_safe_name(file.filename))
+    ok = _to_mp3(tmp, dst)
+    try: os.remove(tmp)
+    except Exception: pass
+    if not ok:
+        return JSONResponse({"error": "fichier audio illisible"}, status_code=400)
+    return {"track": _track_entry(dst)}
+
+def _yt_download(url):
+    """Télécharge l'audio d'une URL (YouTube…) en mp3 dans music/perso/. Renvoie le chemin ou lève."""
+    import yt_dlp
+    os.makedirs(PERSO, exist_ok=True)
+    opts = {
+        "format": "bestaudio/best",
+        "outtmpl": os.path.join(PERSO, ".ytdl_%(id)s.%(ext)s"),
+        "noplaylist": True, "quiet": True, "no_warnings": True,
+        "ffmpeg_location": shutil.which("ffmpeg") or "ffmpeg",
+        "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}],
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+    produced = None
+    rd = info.get("requested_downloads") or []
+    if rd and rd[0].get("filepath"):
+        produced = rd[0]["filepath"]
+    if not (produced and os.path.exists(produced)):
+        produced = os.path.splitext(ydl.prepare_filename(info))[0] + ".mp3"
+    if not (produced and os.path.exists(produced)):
+        raise RuntimeError("audio introuvable après téléchargement")
+    dst = _unique_mp3(_safe_name(info.get("title", "youtube")))
+    os.replace(produced, dst)
+    return dst
+
+@app.post("/api/youtube-music")
+async def api_youtube_music(req: Request):
+    """Ajouter une musique depuis un lien YouTube (audio uniquement) -> music/perso/."""
+    body = await req.json()
+    url = (body.get("url") or "").strip()
+    if not re.match(r"https?://", url):
+        return JSONResponse({"error": "lien invalide"}, status_code=400)
+    try:
+        import yt_dlp  # noqa
+    except Exception:
+        return JSONResponse({"error": "yt-dlp non installé (pip install yt-dlp)"}, status_code=500)
+    try:
+        dst = await asyncio.to_thread(_yt_download, url)
+    except Exception as e:
+        return JSONResponse({"error": f"téléchargement impossible : {str(e)[:140]}"}, status_code=400)
+    return {"track": _track_entry(dst)}
 
 @app.post("/api/suggest")
 async def api_suggest(req: Request):
@@ -348,7 +451,10 @@ def api_selection():
     if not os.path.exists(sb_path): return {"clips": []}
     d = json.load(open(sb_path))
     clips = [c for c in d["clips"] if not (c["type"] == "video" and not c.get("is_subclip"))]
-    clips.sort(key=lambda c: (D.media_date(c), c.get("trim_start", 0)))
+    if any("manual_rank" in c for c in clips):     # l'éditeur reflète l'ordre manuel s'il existe
+        clips.sort(key=lambda c: c.get("manual_rank", 10**6))
+    else:
+        clips.sort(key=lambda c: (D.media_date(c), c.get("trim_start", 0)))
     out = []
     for c in clips:
         md = D.media_date(c)

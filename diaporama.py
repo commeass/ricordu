@@ -17,7 +17,7 @@ os.environ.setdefault("HF_HOME", "/Users/jules/Models")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 MODEL_DEFAULT = "mlx-community/Qwen3.6-35B-A3B-4bit"
-SCORE_VER = "v3"   # bump -> invalide le cache de notation quand le prompt change
+SCORE_VER = "v4"   # bump -> invalide le cache de notation quand le prompt change (v4 : détection aérienne)
 
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp"}
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
@@ -68,6 +68,9 @@ DEFAULTS = {
         "cand_percentile": 45,         # seuil de détection des moments (plus bas = plus de candidats)
         "motion_fps": 6, "motion_edge": 256,   # finesse du flux optique
         "w_pic": 3.0, "w_type": 1.5, "w_contrast": 1.5, "w_dur": 1.0, "w_motion": 1.5,
+        # --- plans aériens / drone (plans d'ouverture, sans son, qui respirent) ---
+        "aerial_hold_s": 4.5,   # durée minimale tenue pour un plan aérien (il doit respirer)
+        "aerial_bonus": 1.2,    # bonus de score : un beau plan large mérite d'être gardé
     },
 }
 
@@ -97,6 +100,10 @@ def ffprobe_info(path):
     except Exception: pass
     if not info["creation_time"]:
         info["creation_time"] = fmt.get("tags", {}).get("creation_time")
+    # indice "drone" via les métadonnées caméra (DJI, Autel, Skydio, Parrot Anafi…)
+    low = r.stdout.decode("utf-8", "ignore").lower()
+    info["drone"] = any(b in low for b in
+        ("dji", "mavic", "phantom", "autel", "skydio", "parrot", "anafi", "fimi", "hubsan"))
     return info
 
 _EXIF_DATE_TAG = 36867  # DateTimeOriginal
@@ -191,7 +198,7 @@ def scan(folder, out):
                 "date_creation": ct.isoformat() if ct else None,
                 "mtime": mtime, "gps": None, "caption": "",
                 "src_duration": round(info["duration"], 3),
-                "has_audio": info["has_audio"],
+                "has_audio": info["has_audio"], "drone": info.get("drone", False),
                 "width": info["width"], "height": info["height"],
                 "trim_start": 0.0, "trim_end": 0.0,
             })
@@ -360,7 +367,8 @@ class VLM:
     PROMPT = ("You are a STRICT photo editor keeping only the very best shots for a short montage. "
               "Answer with ONLY one minified JSON object, no prose, no markdown:\n"
               '{"score":0-10,"sharpness":0-10,"composition":0-10,"faces":0-10,"moment":0-10,'
-              '"relevance":0-10,"beauty":0-10,"caption":"<=7 words present tense no period","tags":["..."]}\n'
+              '"relevance":0-10,"beauty":0-10,"aerial":true|false,"caption":"<=7 words present tense no period","tags":["..."]}\n'
+              "aerial = TRUE only for a bird's-eye / drone / high-altitude shot looking down on landscape, coast or city, with no close subject; otherwise false.\n"
               "Use the FULL 0-10 range and be HARSH. Calibrate strictly: "
               "9-10 = exceptional (tack-sharp, strong emotion/expression, beautiful composition, a special moment); "
               "7-8 = good; 5-6 = ordinary snapshot; 3-4 = weak (soft focus, cluttered, subject looking away, awkward framing); "
@@ -647,6 +655,7 @@ def ai_select(sb_path, target, order, model, force, no_vlm):
                 d = vlm.score(rp)
                 res = {"ai_score": float(d.get("score", 0)), "ai_caption": d.get("caption", ""),
                        "ai_tags": d.get("tags", []), "ai_faces": d.get("faces"),
+                       "aerial": bool(d.get("aerial")),
                        "prefilter_reason": None, "ai_sub": {k: d.get(k) for k in
                        ("sharpness","composition","faces","moment","relevance","beauty")}}
             else:
@@ -666,6 +675,7 @@ def ai_select(sb_path, target, order, model, force, no_vlm):
         print(f"[ai] vidéo {os.path.basename(v['file'])} ({dur:.0f}s) : analyse audio+mouvement ...", flush=True)
         print(f"[progress] videos {vi}/{len(videos)}", flush=True)
         has_audio = bool(v.get("has_audio"))
+        has_drone = bool(v.get("drone"))
         shots = detect_shots(v["file"], A["scene_threshold"]) or [(0.0, dur)]
         bounds = sorted({b for sh in shots for b in sh})
         mtimes, mvals = motion_curve(v["file"], A.get("motion_fps", 6), A.get("motion_edge", 256))
@@ -702,17 +712,24 @@ def ai_select(sb_path, target, order, model, force, no_vlm):
         for (s0, s1, u) in kept:                # VLM en re-ranker : 1 frame au pic
             pk = min(max(u.get("peak_t", (s0 + s1) / 2), s0), s1)
             fp = os.path.join(tmpd, f"vf_{int(pk*100)}.jpg")
-            vlm_s, cap = 6.0, ""
+            vlm_s, cap, aerial = 6.0, "", False
             if extract_frame(v["file"], pk, fp, A["vlm_long_edge"]):
                 if vlm and vlm.ok:
                     d = vlm.score(fp); vlm_s = float(d.get("score", 6)); cap = d.get("caption", "")
+                    # aérien = le VLM voit un plan large/plongeant, OU métadonnées drone sans visage net
+                    aerial = bool(d.get("aerial")) or (has_drone and float(d.get("faces", 5) or 5) <= 2)
                 else:
                     from PIL import Image
                     vlm_s = cv_only_score(Image.open(fp).convert("RGB"), 200)["score"]
+                    aerial = has_drone            # sans VLM : on se fie aux métadonnées drone
+            if aerial:                            # un plan d'ouverture doit RESPIRER -> on l'allonge
+                s1 = min(dur, max(s1, s0 + A.get("aerial_hold_s", 4.5)))
             score_final = u.get("score", 5) * (0.5 + vlm_s / 20.0)
+            if aerial: score_final += A.get("aerial_bonus", 1.2)
             nv = dict(v)
             nv.update({"trim_start": s0, "trim_end": round(dur - s1, 2), "duration": round(s1 - s0, 2),
                        "ai_score": round(score_final, 2), "ai_caption": cap, "ai_type": u.get("type"),
+                       "aerial": aerial, "has_audio": v.get("has_audio") and not aerial,
                        "ai_include": True, "prefilter_reason": None, "is_subclip": True})
             new_clips.append(nv)
         v["include"] = False; v["ai_include"] = False; v["prefilter_reason"] = "split_into_subclips"
@@ -795,6 +812,8 @@ def ai_select(sb_path, target, order, model, force, no_vlm):
     print(f"[ai] ordre = {S['order']}. Édite {sb_path} puis : render")
 
 def order_clips(clips, mode):
+    if mode == "manual":          # ordre défini à la main dans l'éditeur (glisser-déposer)
+        return sorted(clips, key=lambda c: c.get("manual_rank", 10**6))
     if mode == "highlights":
         return sorted(clips, key=lambda c: -c.get("ai_score", 0))
     if mode == "narrative":
@@ -818,7 +837,8 @@ def scene_chapters(clips):
         for c in clips: g[c.get("scene_id", -99)].append(c)
         scenes = sorted(g.values(), key=lambda s: sorted(media_date(x) for x in s)[len(s)//2])
         out = []
-        for s in scenes: out += sorted(s, key=media_date)
+        for s in scenes:   # plan aérien en tête de scène (établit le lieu), puis chrono
+            out += sorted(s, key=lambda x: (not x.get("aerial"), media_date(x)))
         return out
     cl = sorted(clips, key=media_date)
     chapters, cur = [], []
@@ -835,8 +855,8 @@ def scene_chapters(clips):
         else: cur.append(c)
     if cur: chapters.append(cur)
     out = []
-    for ch in chapters:
-        out += sorted(ch, key=media_date)   # chrono DANS chaque chapitre (avant: par score -> ordre aléatoire)
+    for ch in chapters:   # plan aérien en tête de chapitre, puis chrono
+        out += sorted(ch, key=lambda x: (not x.get("aerial"), media_date(x)))
     return out
 
 def find_climax(clips):
@@ -848,10 +868,19 @@ def find_climax(clips):
         txt = (str(c.get("ai_caption", "")) + " " + " ".join(c.get("ai_tags", []) or [])).lower()
         s = sum(2.5 for k in KW if k in txt)
         if c.get("ai_type") in ("exclaim", "applause", "laugh"): s += 2.5
+        if c.get("aerial"): s -= 3.0      # un plan large/drone respire, ce n'est pas le climax émotionnel
         s += c.get("ai_score", 0) * 0.2
         s += 1.5 * (1 - abs(i / max(1, n - 1) - 0.68))   # le climax est souvent vers 2/3 du déroulé
         if s > best: best, bi = s, i
     return bi
+
+def lead_with_aerial(clips):
+    """Met un beau plan aérien en OUVERTURE (plan d'établissement), s'il y en a un dans la 1re moitié."""
+    half = max(1, len(clips) // 2)
+    cands = [(i, c) for i, c in enumerate(clips[:half]) if c.get("aerial")]
+    if not cands: return clips
+    i = max(cands, key=lambda ic: ic[1].get("ai_score", 0))[0]
+    return [clips[i]] + clips[:i] + clips[i+1:]
 
 # ----------------------------------------------------------------------------- RENDER
 # --- Texte via Pillow -> PNG -> overlay ffmpeg (ce build de ffmpeg n'a pas drawtext) ---
@@ -1105,6 +1134,33 @@ def analyze_beats(path):
     bt = [float(x) for x in librosa.frames_to_time(beats, sr=sr)]
     return tempo, bt
 
+def beat_strengths(path, beats):
+    """Énergie normalisée [0,1] par temps (onset + RMS) : sert à caler le RYTHME des coupes
+    sur l'intensité réelle du morceau (intro calme -> coupes lentes ; refrain/drop -> coupes rapides)."""
+    import librosa, numpy as np
+    if not beats or len(beats) < 2: return []
+    y, sr = librosa.load(path, sr=22050, mono=True)
+    hop = 512
+    onset = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop)
+    rms = librosa.feature.rms(y=y, hop_length=hop)[0]
+    times = librosa.frames_to_time(np.arange(len(onset)), sr=sr, hop_length=hop)
+    period = beats[1] - beats[0]
+    def agg(arr):
+        out = []
+        for i, b in enumerate(beats):
+            e = beats[i+1] if i+1 < len(beats) else b + period
+            lo = int(np.searchsorted(times, b)); hi = max(lo+1, int(np.searchsorted(times, e)))
+            seg = arr[lo:hi]
+            out.append(float(np.mean(seg)) if len(seg) else 0.0)
+        return np.asarray(out)
+    def norm(a):
+        lo, hi = np.percentile(a, 10), np.percentile(a, 90)
+        return np.clip((a - lo) / (hi - lo + 1e-6), 0, 1)
+    e = 0.6 * norm(agg(onset)) + 0.4 * norm(agg(rms))
+    if len(e) >= 3:                                   # lissage : pas de sauts beat-à-beat
+        e = np.convolve(e, np.array([0.25, 0.5, 0.25]), mode="same")
+    return [float(x) for x in e]
+
 def _beat_grid(beats, period, upto):
     g = list(beats)
     if not g:
@@ -1125,6 +1181,8 @@ def assign_beat_durations(clips, beats, S, hard=True):
     B = max(1, int(S.get("beats_per_clip", 4)))
     dynamic = S.get("rhythm") == "dynamique"
     recit = S.get("rhythm") == "recit"
+    song = S.get("rhythm") == "song"
+    energy = S.get("_beat_energy") or []
     cidx = int(S.get("_climax_idx", len(clips)//2))
     edgeB = max(3, B)                     # base aux extrémités pour un vrai contraste
     n = len(clips)
@@ -1142,6 +1200,12 @@ def assign_beat_durations(clips, beats, S, hard=True):
             else:
                 d = (i - cidx) / max(1, n - 1 - cidx)    # 0 juste après -> 1 à la fin
                 nb = max(1, round(2 + 2 * d))            # RELÂCHE 2 -> 4 en douceur
+        elif song and energy:
+            # ÉPOUSE LA CHANSON : coupes lentes quand le morceau est calme, rapides quand il monte
+            bi = min(bisect.bisect_left(beats, cut_prev), len(energy) - 1)
+            e = energy[bi]                            # 0 = calme, 1 = intense
+            SLOW, FAST = 6, 1
+            nb = max(1, round(SLOW - (SLOW - FAST) * e))
         elif dynamic:
             # accélère vers "chaque beat" au MILIEU du montage, relâche aux extrémités
             p = i / max(1, n - 1)
@@ -1253,14 +1317,20 @@ def render(sb_path, out, music=None, no_beat=False):
     music = S.get("music")
     workdir = os.path.join(os.path.dirname(os.path.abspath(sb_path)), "work")
     os.makedirs(workdir, exist_ok=True)
-    order = "chrono" if S.get("rhythm") == "recit" else S.get("order", "chrono")
+    order = S.get("order", "chrono")
+    if S.get("rhythm") == "recit" and order != "manual":   # Récit force la chrono, sauf si ordre manuel imposé
+        order = "chrono"
     included = [c for c in sb["clips"] if c.get("include")]
     if order == "scene":
         try: scene_cluster(included, S, os.path.join(workdir, ".scene_cache.json"))
         except Exception as e: print(f"[render] reconnaissance de scènes indispo ({e})")
     clips = order_clips(included, order)
+    if order in ("chrono", "scene"):
+        clips = lead_with_aerial(clips)       # plan d'ouverture aérien si dispo
     if not clips:
         print("[render] aucun clip inclus."); return
+    n_aerial = sum(1 for c in clips if c.get("aerial"))
+    if n_aerial: print(f"[render] {n_aerial} plan(s) aérien(s) : ouverture/transitions, tenus plus longtemps, musique non coupée")
     d0 = media_date(clips[0]); sub = fr_date(d0) if d0 else ""
     if S.get("rhythm") == "recit":
         S["_climax_idx"] = find_climax(clips)
@@ -1298,6 +1368,12 @@ def render(sb_path, out, music=None, no_beat=False):
     elif beat:
         try:
             tempo, beats = analyze_beats(music)
+            if S.get("rhythm") == "song":
+                try:
+                    S["_beat_energy"] = beat_strengths(music, beats)
+                    print(f"[render] mode SUR LA MUSIQUE : rythme calé sur l'énergie du morceau")
+                except Exception as e:
+                    print(f"[render] énergie du morceau indispo ({e})")
             td = assign_beat_durations(clips, beats, S, hard)
             if td: title_dur = td; print(f"[render] synchro {tempo:.0f} BPM, {S.get('beats_per_clip',4)} beats/plan")
             else: beat = hard = False
@@ -1314,7 +1390,7 @@ def render(sb_path, out, music=None, no_beat=False):
         rd = c.get("_rdur") if use_rdur else None
         seg, dur = build_segment(c, i, S, workdir, rd)
         if seg:
-            segments.append((seg, dur)); meta.append(c["type"] == "video" and bool(c.get("has_audio")))
+            segments.append((seg, dur)); meta.append(c["type"] == "video" and bool(c.get("has_audio")) and not c.get("aerial"))
         print(f"[progress] segments {i}/{len(clips)}", flush=True)
     end_seg = None
     if S.get("end_card", True):                       # carton de fin séparé -> enchaînement DOUX
