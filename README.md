@@ -30,7 +30,7 @@
 <br/>
 
 ![Ricordu — un montage souvenir généré 100% en local](docs/demo.gif)
-<sub>*Un vrai montage Ricordu, généré en local — carton-titre, coupes calées sur la musique, Ken Burns. (Images de démo : films open-movies Blender, CC-BY.)*</sub>
+<sub>*Un vrai montage Ricordu, généré en local — ouverture sur un **plan drone détecté par l'IA**, carton-titre, coupes calées sur la musique, Ken Burns. (Images de démo libres de droit : Blender + séquences drone CC-BY.)*</sub>
 
 </div>
 
@@ -235,7 +235,7 @@ Les *issues* et *pull requests* sont bienvenues. Principe directeur non négocia
 - 🧠 **VLM** — [Qwen](https://github.com/QwenLM) (Alibaba), packagé par [mlx-community](https://huggingface.co/mlx-community).
 - 🎨 **Scènes** — [DINOv2](https://github.com/facebookresearch/dinov2) (Meta AI).
 - ⚡ **On-device** — [Apple MLX](https://github.com/ml-explore/mlx).
-- 🎞️ **Images de la démo** — extraits des films open-movies [Blender Foundation](https://www.blender.org/about/projects/) (*Big Buck Bunny*, *Caminandes*, *Spring*), licence **CC BY**.
+- 🎞️ **Images de la démo** — films open-movies [Blender Foundation](https://www.blender.org/about/projects/) (*Big Buck Bunny*, *Caminandes*, *Spring*) et séquences drone YouTube (« Free HD videos – no copyright », « Romance Post BD »). Toutes en **Creative Commons BY**.
 
 ---
 
