@@ -723,7 +723,11 @@ def ai_select(sb_path, target, order, model, force, no_vlm):
                     vlm_s = cv_only_score(Image.open(fp).convert("RGB"), 200)["score"]
                     aerial = has_drone            # sans VLM : on se fie aux métadonnées drone
             if aerial:                            # un plan d'ouverture doit RESPIRER -> on l'allonge
-                s1 = min(dur, max(s1, s0 + A.get("aerial_hold_s", 4.5)))
+                hold = A.get("aerial_hold_s", 4.5)
+                if s1 - s0 < hold:
+                    s1 = min(dur, s1 + (hold - (s1 - s0)))      # d'abord vers l'avant
+                    if s1 - s0 < hold:                          # puis vers l'arrière si besoin
+                        s0 = max(0.0, s0 - (hold - (s1 - s0)))
             score_final = u.get("score", 5) * (0.5 + vlm_s / 20.0)
             if aerial: score_final += A.get("aerial_bonus", 1.2)
             nv = dict(v)
