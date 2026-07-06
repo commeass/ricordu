@@ -7,7 +7,8 @@ gère la bibliothèque musicale et suggère des musiques selon l'événement.
 Lancer :  ./ui.sh   (ou : .venv/bin/uvicorn app:app --port 8723)
 Tout tourne en local. Aucune donnée ne sort de la machine.
 """
-import os, sys, json, time, queue, threading, subprocess, io, re, shutil, asyncio, secrets
+import os, sys, json, time, queue, threading, subprocess, io, re, shutil, asyncio, secrets, signal
+from collections import deque
 from urllib.parse import quote
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse, Response
@@ -50,10 +51,15 @@ async def no_cache(request, call_next):
 
 # ----------------------------------------------------------------- état du job
 JOB = {"status": "idle", "stage": None, "progress": 0, "log": [], "reports": {},
-       "q": queue.Queue(), "montage": None}
+       "subs": [], "montage": None, "proc": None, "tail": deque(maxlen=8)}
+SUBS_LOCK = threading.Lock()   # protège la liste d'abonnés SSE (multi-onglets)
 
 def emit(ev):
-    JOB["q"].put(ev)
+    """Diffuse un événement à TOUS les onglets connectés (chaque abonné a sa Queue)."""
+    with SUBS_LOCK:
+        subs = list(JOB["subs"])
+    for q in subs:
+        q.put(ev)
 
 def job_busy():
     """Vrai seulement si un thread de rendu est RÉELLEMENT vivant (évite les états 'en cours' fantômes)."""
@@ -131,12 +137,34 @@ def build_music_mix(files, out):
 
 # ----------------------------------------------------------------- pipeline
 def stream_cmd(cmd, on_line):
+    """Lance une étape dans SON PROPRE groupe de processus (annulable via killpg sans
+    toucher aux autres process). Garde les dernières lignes dans JOB["tail"] pour les erreurs."""
+    if JOB.get("status") == "cancelled":     # annulation arrivée entre deux étapes
+        return -1
+    JOB["tail"].clear()
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                         text=True, bufsize=1, env=ENV, cwd=BASE)
-    for line in p.stdout:
-        on_line(line.rstrip("\n"))
-    p.wait()
+                         text=True, bufsize=1, env=ENV, cwd=BASE, start_new_session=True)
+    JOB["proc"] = p
+    try:
+        for line in p.stdout:
+            line = line.rstrip("\n")
+            if line.strip(): JOB["tail"].append(line)
+            on_line(line)
+        p.wait()
+    finally:
+        JOB["proc"] = None
     return p.returncode
+
+def stage_failed(rc, label):
+    """Vrai si le pipeline doit s'arrêter (échec ou annulation). Émet l'erreur avec la fin du log."""
+    if JOB.get("status") == "cancelled":     # déjà annoncé par /api/cancel : rien par-dessus
+        return True
+    if rc != 0:
+        tail = " | ".join(list(JOB["tail"])[-3:])
+        JOB.update(status="error")
+        emit({"type": "error", "message": f"{label} a échoué (code {rc})" + (f" — {tail}" if tail else "")})
+        return True
+    return False
 
 def scan_report(sb_path):
     sb = json.load(open(sb_path))
@@ -214,7 +242,8 @@ def run_pipeline(opts):
         sb = os.path.join(RUN, "storyboard.json")
         folder = opts["folder"]
         emit({"type": "stage", "stage": "scan", "label": "Lecture du dossier"})
-        stream_cmd([PY, "diaporama.py", "scan", folder, "-o", sb], lambda l: emit({"type": "log", "line": l}))
+        rc = stream_cmd([PY, "diaporama.py", "scan", folder, "-o", sb], lambda l: emit({"type": "log", "line": l}))
+        if stage_failed(rc, "Le scan"): return
         rep = scan_report(sb); JOB["reports"]["scan"] = rep
         emit({"type": "report", "name": "scan", "data": rep})
 
@@ -252,12 +281,14 @@ def run_pipeline(opts):
                 JOB["progress"] = int(base + frac * (50 if mp.group(1) == "photos" else 15))
                 emit({"type": "progress", "value": JOB["progress"], "detail": l.split("] ")[-1]})
             if "[ai] gardé" in l: kept_line["v"] = l
-        stream_cmd([PY, "diaporama.py", "ai_select", sb], on_ai)
+        rc = stream_cmd([PY, "diaporama.py", "ai_select", sb], on_ai)
+        if stage_failed(rc, "L'analyse IA"): return
         rep = selection_report(sb, kept_line["v"]); JOB["reports"]["selection"] = rep
         emit({"type": "report", "name": "selection", "data": rep})
 
         render_stage(sb)
     except Exception as e:
+        if JOB.get("status") == "cancelled": return   # pas d'erreur par-dessus une annulation
         JOB.update(status="error")
         emit({"type": "error", "message": str(e)})
 
@@ -265,6 +296,8 @@ def render_stage(sb_path):
     JOB["stage"] = "render"
     emit({"type": "stage", "stage": "render", "label": "Montage & rendu"})
     montage = os.path.join(RUN, "montage.mp4")
+    try: os.remove(montage)     # sinon un montage PÉRIMÉ d'un run précédent masquerait un rendu vide
+    except FileNotFoundError: pass
     def on_r(l):
         emit({"type": "log", "line": l})
         mp = re.search(r"\[progress\] segments (\d+)/(\d+)", l)
@@ -272,10 +305,15 @@ def render_stage(sb_path):
             frac = int(mp.group(1)) / max(1, int(mp.group(2)))
             JOB["progress"] = int(72 + frac * 25)
             emit({"type": "progress", "value": JOB["progress"], "detail": f"segment {mp.group(1)}/{mp.group(2)}"})
-    stream_cmd([PY, "diaporama.py", "render", sb_path, "-o", montage], on_r)
+    rc = stream_cmd([PY, "diaporama.py", "render", sb_path, "-o", montage], on_r)
+    if stage_failed(rc, "Le rendu"): return
+    if not os.path.exists(montage):
+        JOB.update(status="error")
+        emit({"type": "error", "message": "le rendu s'est terminé sans produire montage.mp4 (voir le log ci-dessus)"})
+        return
     S = json.load(open(sb_path))["settings"]
     music_abs = os.path.join(BASE, S["music"]) if S.get("music") else None
-    rep = final_report(sb_path, montage, music_abs) if os.path.exists(montage) else {}
+    rep = final_report(sb_path, montage, music_abs)
     JOB["reports"]["final"] = rep; JOB["montage"] = montage
     JOB.update(status="done", progress=100)
     emit({"type": "report", "name": "final", "data": rep})
@@ -316,6 +354,7 @@ def run_reselect(includes, opts):
         json.dump(d, open(sb_path, "w"), indent=2, ensure_ascii=False)
         render_stage(sb_path)
     except Exception as e:
+        if JOB.get("status") == "cancelled": return   # pas d'erreur par-dessus une annulation
         JOB.update(status="error")
         emit({"type": "error", "message": str(e)})
 
@@ -421,27 +460,56 @@ async def api_run(req: Request):
     opts = await req.json()
     if not opts.get("folder") or not os.path.isdir(opts["folder"]):
         return JSONResponse({"error": "dossier introuvable"}, status_code=400)
-    JOB["q"] = queue.Queue()
+    t_old = JOB.get("thread")                 # laisse un thread annulé finir de se replier
+    if t_old is not None and t_old.is_alive(): t_old.join(timeout=3)
     t = threading.Thread(target=run_pipeline, args=(opts,), daemon=True); t.start(); JOB["thread"] = t
     return {"ok": True}
 
 @app.post("/api/cancel")
 def api_cancel():
-    JOB["status"] = "idle"; JOB["thread"] = None
+    """Annule le montage en cours : tue le groupe de processus DU JOB (jamais d'autres process)."""
+    if job_busy():
+        JOB["status"] = "cancelled"           # lu par stream_cmd/stage_failed -> le thread s'arrête seul
+        p = JOB.get("proc")
+        if p is not None and p.poll() is None:
+            try:
+                pg = os.getpgid(p.pid)
+                os.killpg(pg, signal.SIGTERM)             # diaporama.py + ses enfants (ffmpeg…)
+                for _ in range(20):                        # ~2 s de grâce
+                    if p.poll() is not None: break
+                    time.sleep(0.1)
+                if p.poll() is None: os.killpg(pg, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        emit({"type": "cancelled"})
+    else:
+        JOB["status"] = "idle"
+    JOB["thread"] = None
     return {"ok": True}
 
 @app.get("/api/events")
 def api_events():
     def gen():
-        yield "data: " + json.dumps({"type": "hello", "status": JOB["status"]}) + "\n\n"
-        while True:
-            try:
-                ev = JOB["q"].get(timeout=20)
-                yield "data: " + json.dumps(ev) + "\n\n"
-                if ev["type"] in ("done", "error"):
-                    break
-            except queue.Empty:
-                yield ": keepalive\n\n"
+        q = queue.Queue()                     # une file par onglet (broadcast via emit)
+        with SUBS_LOCK:
+            JOB["subs"].append(q)
+        try:
+            yield "data: " + json.dumps({"type": "hello", "status": JOB["status"]}) + "\n\n"
+            if JOB["status"] == "running":    # onglet qui rejoint un run en cours : état courant
+                if JOB.get("stage"):
+                    yield "data: " + json.dumps({"type": "stage", "stage": JOB["stage"]}) + "\n\n"
+                yield "data: " + json.dumps({"type": "progress", "value": JOB["progress"], "detail": ""}) + "\n\n"
+            while True:
+                try:
+                    ev = q.get(timeout=20)
+                    yield "data: " + json.dumps(ev) + "\n\n"
+                    if ev["type"] in ("done", "error", "cancelled"):
+                        break
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+        finally:
+            with SUBS_LOCK:
+                if q in JOB["subs"]: JOB["subs"].remove(q)
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 @app.get("/api/thumb")
@@ -542,7 +610,8 @@ async def api_reselect(req: Request):
     if job_busy():
         return JSONResponse({"error": "un montage est déjà en cours"}, status_code=409)
     body = await req.json()
-    JOB["q"] = queue.Queue()
+    t_old = JOB.get("thread")                 # laisse un thread annulé finir de se replier
+    if t_old is not None and t_old.is_alive(): t_old.join(timeout=3)
     t = threading.Thread(target=run_reselect, args=(body.get("includes", {}), body), daemon=True); t.start(); JOB["thread"] = t
     return {"ok": True}
 
