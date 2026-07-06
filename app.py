@@ -116,13 +116,52 @@ def build_music_mix(files, out):
     return out if os.path.exists(out) else files[0]
 
 # ----------------------------------------------------------------- pipeline
-def stream_cmd(cmd, on_line):
+def stream_cmd(cmd, on_line, env=None):
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                         text=True, bufsize=1, env=ENV, cwd=BASE)
+                         text=True, bufsize=1, env=env or ENV, cwd=BASE)
     for line in p.stdout:
         on_line(line.rstrip("\n"))
     p.wait()
     return p.returncode
+
+# ----------------------------------------------------------------- worker VLM partagé
+# Le modèle 20 Go reste chargé dans un process séparé (diaporama.py vlm_serve) entre deux
+# montages : ai_select n'attend plus 1-2 min de rechargement. Il s'auto-coupe après 30 min d'inactivité.
+VLM_PORT = int(os.environ.get("RICORDU_VLM_PORT", "8768"))
+VLM_URL = f"http://127.0.0.1:{VLM_PORT}"
+
+def _vlm_health(timeout=2):
+    """None = worker injoignable ; False = joignable mais modèle KO ; True = prêt."""
+    try:
+        import urllib.request
+        with urllib.request.urlopen(VLM_URL + "/health", timeout=timeout) as r:
+            return bool(json.loads(r.read().decode()).get("ok"))
+    except Exception:
+        return None
+
+def ensure_vlm_worker():
+    """Démarre le worker VLM partagé si besoin et attend qu'il soit prêt (le modèle met ~1-2 min à charger).
+    start_new_session=True : le worker survit au « Annuler » (killpg du job). Renvoie l'URL ou None (repli local)."""
+    h = _vlm_health()
+    if h: return VLM_URL
+    if h is None:                                          # personne n'écoute -> on le lance
+        try:
+            log = open(os.path.join(RUN, "vlm_worker.log"), "ab")
+            subprocess.Popen([PY, "diaporama.py", "vlm_serve", "--port", str(VLM_PORT)],
+                             stdout=log, stderr=subprocess.STDOUT,
+                             start_new_session=True, cwd=BASE, env=ENV)
+        except Exception as e:
+            emit({"type": "log", "line": f"[vlm] worker non lancé ({e}) -> chargement local"})
+            return None
+    emit({"type": "log", "line": "[vlm] chargement du modèle partagé…"})
+    t0 = time.time()
+    while time.time() - t0 < 180:                          # poll 2 s, timeout 3 min
+        h = _vlm_health()
+        if h: return VLM_URL
+        if h is False: break                               # up mais modèle KO : inutile d'attendre
+        time.sleep(2)
+    emit({"type": "log", "line": "[vlm] worker indisponible -> ai_select chargera le modèle localement"})
+    return None
 
 def scan_report(sb_path):
     sb = json.load(open(sb_path))
@@ -228,6 +267,8 @@ def run_pipeline(opts):
 
         JOB["stage"] = "ai"
         emit({"type": "stage", "stage": "ai", "label": "Analyse IA (notation locale)"})
+        vlm_url = ensure_vlm_worker()          # worker partagé -> pas de rechargement du modèle
+        env_ai = dict(ENV, RICORDU_VLM_URL=vlm_url) if vlm_url else None
         kept_line = {"v": ""}
         def on_ai(l):
             emit({"type": "log", "line": l})
@@ -238,7 +279,7 @@ def run_pipeline(opts):
                 JOB["progress"] = int(base + frac * (50 if mp.group(1) == "photos" else 15))
                 emit({"type": "progress", "value": JOB["progress"], "detail": l.split("] ")[-1]})
             if "[ai] gardé" in l: kept_line["v"] = l
-        stream_cmd([PY, "diaporama.py", "ai_select", sb], on_ai)
+        stream_cmd([PY, "diaporama.py", "ai_select", sb], on_ai, env=env_ai)
         rep = selection_report(sb, kept_line["v"]); JOB["reports"]["selection"] = rep
         emit({"type": "report", "name": "selection", "data": rep})
 

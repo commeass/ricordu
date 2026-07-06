@@ -22,6 +22,8 @@ Models/
 # Caches
 .scene_cache.json
 .ai_cache.json
+.beats_cache.json
+vlm_worker.log
 *.DS_Store
 
 # Notes internes de dev (non publiées)
