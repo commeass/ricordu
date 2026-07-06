@@ -17,7 +17,7 @@ os.environ.setdefault("HF_HOME", "/Users/jules/Models")
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 MODEL_DEFAULT = "mlx-community/Qwen3.6-35B-A3B-4bit"
-SCORE_VER = "v4"   # bump -> invalide le cache de notation quand le prompt change (v4 : détection aérienne)
+SCORE_VER = "v5"   # bump -> invalide le cache de notation quand le prompt change (v5 : yeux + netteté visage)
 
 PHOTO_EXT = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp"}
 VIDEO_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv"}
@@ -52,6 +52,9 @@ DEFAULTS = {
         "model": MODEL_DEFAULT,
         "blur_var_min": 60.0,     # variance Laplacien (sur image 1024px) en dessous = flou
         "phash_hamming_max": 8,
+        "eyes_min": 2.5,          # yeux <= ce seuil (photo AVEC visages) -> écartée (yeux fermés)
+        "face_sharp_min": 2.5,    # netteté visage <= ce seuil (photo AVEC visages) -> écartée (visage flou)
+        "dino_dup_cos": 0.92,     # best-of : cosinus DINOv2 au-dessus = quasi-doublon sémantique -> skip
         "score_keep_min": 5.0,
         "score_floor": 6.0,       # score en dessous -> écarté de la sélection (best-of)
         "scene_threshold": 27.0,
@@ -367,8 +370,11 @@ class VLM:
     PROMPT = ("You are a STRICT photo editor keeping only the very best shots for a short montage. "
               "Answer with ONLY one minified JSON object, no prose, no markdown:\n"
               '{"score":0-10,"sharpness":0-10,"composition":0-10,"faces":0-10,"moment":0-10,'
-              '"relevance":0-10,"beauty":0-10,"aerial":true|false,"caption":"<=7 words present tense no period","tags":["..."]}\n'
+              '"relevance":0-10,"beauty":0-10,"eyes":0-10,"face_sharp":0-10,"aerial":true|false,'
+              '"caption":"<=7 words present tense no period","tags":["..."]}\n'
               "aerial = TRUE only for a bird's-eye / drone / high-altitude shot looking down on landscape, coast or city, with no close subject; otherwise false.\n"
+              "eyes: 10 = every visible eye clearly OPEN and sharp; 0 = the main subject has eyes closed, half-closed or mid-blink; 5 = no face in the photo. "
+              "face_sharp = sharpness of the FACES only: 10 = crisp in-focus faces; 0 = blurred, soft or motion-blurred faces; 5 = no face. Judge these two HARSHLY.\n"
               "Use the FULL 0-10 range and be HARSH. Calibrate strictly: "
               "9-10 = exceptional (tack-sharp, strong emotion/expression, beautiful composition, a special moment); "
               "7-8 = good; 5-6 = ordinary snapshot; 3-4 = weak (soft focus, cluttered, subject looking away, awkward framing); "
@@ -383,12 +389,32 @@ class VLM:
             formatted = self._apply(self.processor, self.config, self.PROMPT, num_images=1)
         try:
             out = self._generate(self.model, self.processor, formatted, image=[img_path],
-                                  max_tokens=160, temperature=0.0, verbose=False)
+                                  max_tokens=200, temperature=0.0, verbose=False)
         except TypeError:
             out = self._generate(self.model, self.processor, formatted, [img_path],
-                                 max_tokens=160, temperature=0.0, verbose=False)
+                                 max_tokens=200, temperature=0.0, verbose=False)
         text = out.text if hasattr(out, "text") else str(out)
         return parse_score_json(text)
+
+    def rank(self, paths):
+        """Classement COMPARATIF de N photos (multi-image). Renvoie les indices 0-based
+        du meilleur au moins bon, ou None si le modèle/parse échoue (l'appelant gère)."""
+        n = len(paths)
+        prompt = (f"Rank these {n} photos from best to worst for a family montage. "
+                  'Answer ONLY {"order":[indices 0-based]}')
+        try:
+            formatted = self._apply(self.processor, self.config, prompt,
+                                    num_images=n, enable_thinking=False)
+        except TypeError:
+            formatted = self._apply(self.processor, self.config, prompt, num_images=n)
+        try:
+            out = self._generate(self.model, self.processor, formatted, image=list(paths),
+                                 max_tokens=80, temperature=0.0, verbose=False)
+        except TypeError:
+            out = self._generate(self.model, self.processor, formatted, list(paths),
+                                 max_tokens=80, temperature=0.0, verbose=False)
+        text = out.text if hasattr(out, "text") else str(out)
+        return parse_rank_json(text, n)
 
 def parse_score_json(text):
     # retire un bloc <think>...</think> éventuel, prend le dernier {...} parseable
@@ -402,6 +428,55 @@ def parse_score_json(text):
                 return d
         except Exception: continue
     return {"score": 0.0, "caption": "", "tags": [], "reason": "parse_error"}
+
+def parse_rank_json(text, n):
+    """Extrait {"order":[...]} d'une sortie VLM (bruit <think> toléré). Renvoie une liste
+    d'indices 0-based valides et dédupliqués (permutation partielle acceptée), ou None."""
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    for c in reversed(re.findall(r"\{[^{}]*\}", text, flags=re.S)):
+        try:
+            order = json.loads(c).get("order")
+            if not isinstance(order, list): continue
+            seen, out = set(), []
+            for v in order:
+                i = int(v)
+                if 0 <= i < n and i not in seen: seen.add(i); out.append(i)
+            if out: return out
+        except Exception: continue
+    return None
+
+def _num(v):
+    """float(v) si c'est un vrai nombre (pas bool, pas None) — sinon None. Tolère les vieux caches."""
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+def eyes_prefilter_reason(c, A):
+    """v5 éliminatoire : yeux fermés ("eyes") ou visages flous ("softface") — UNIQUEMENT si le
+    VLM a vu des visages (sous-score faces > 0). Clé absente/None (vieux cache, fallback CV,
+    mock) -> None : on n'écarte JAMAIS sur une info manquante."""
+    sub = c.get("ai_sub") or {}
+    f = _num(sub.get("faces"))
+    if f is None: f = _num(c.get("ai_faces"))
+    if f is None or f <= 0: return None
+    ey = _num(sub.get("eyes"))
+    if ey is not None and ey <= A.get("eyes_min", 2.5): return "eyes"
+    fs = _num(sub.get("face_sharp"))
+    if fs is not None and fs <= A.get("face_sharp_min", 2.5): return "softface"
+    return None
+
+def composite_score(c):
+    """Score composite d'une photo depuis ses sous-scores VLM (fallback : ai_score brut)."""
+    sub = c.get("ai_sub")
+    if not sub: return c.get("ai_score", 7.0)   # vidéos / fallback CV : score du span
+    def g(k, d=7.0):
+        v = sub.get(k); return float(v) if isinstance(v, (int, float)) else d
+    # pondère les dimensions qui DISCRIMINENT (netteté, composition) + fait remonter les instants forts (moment)
+    base = (0.30*g("sharpness") + 0.24*g("composition") + 0.14*g("beauty")
+            + 0.14*g("moment") + 0.10*g("relevance") + 0.08*g("faces"))
+    # v5 : pénalité multiplicative DOUCE yeux mi-clos / visages mous (clé absente = aucune pénalité)
+    ey, fs = _num(sub.get("eyes")), _num(sub.get("face_sharp"))
+    if ey is not None and ey <= 4: base *= 0.85
+    if fs is not None and fs <= 4: base *= 0.85
+    return base
 
 def cv_only_score(pil_img, blur):
     """Note de secours sans VLM : netteté + luminosité + visages."""
@@ -685,12 +760,17 @@ def ai_select(sb_path, target, order, model, force, no_vlm):
                        "ai_tags": d.get("tags", []), "ai_faces": d.get("faces"),
                        "aerial": bool(d.get("aerial")),
                        "prefilter_reason": None, "ai_sub": {k: d.get(k) for k in
-                       ("sharpness","composition","faces","moment","relevance","beauty")}}
+                       ("sharpness","composition","faces","moment","relevance","beauty","eyes","face_sharp")}}
             else:
                 d = cv_only_score(img, bvar)
                 res = {"ai_score": d["score"], "ai_caption": "", "ai_tags": [], "prefilter_reason": None}
             res["blur_var"] = round(bvar, 1)
             c.update(res); cache[key] = res
+        # v5 éliminatoire yeux fermés / visages flous (appliqué aussi aux entrées en cache :
+        # les SEUILS restent réglables sans re-noter ; jamais déclenché si les clés manquent)
+        if c.get("prefilter_reason") is None:
+            r5 = eyes_prefilter_reason(c, A)
+            if r5: c["prefilter_reason"] = r5
         c["ai_include"] = c.get("prefilter_reason") is None
         if i % 2 == 0 or i == len(photos): print(f"[progress] photos {i}/{len(photos)}", flush=True)
 
@@ -769,14 +849,7 @@ def ai_select(sb_path, target, order, model, force, no_vlm):
     json.dump(cache, open(cache_path, "w"), indent=2, ensure_ascii=False)
 
     # ---- Sélection best-of (vidéos + photos) vers la durée cible ----
-    def composite(c):
-        sub = c.get("ai_sub")
-        if not sub: return c.get("ai_score", 7.0)   # vidéos : score du span
-        def g(k, d=7.0):
-            v = sub.get(k); return float(v) if isinstance(v, (int, float)) else d
-        # pondère les dimensions qui DISCRIMINENT (netteté, composition) + fait remonter les instants forts (moment)
-        return (0.30*g("sharpness") + 0.24*g("composition") + 0.14*g("beauty")
-                + 0.14*g("moment") + 0.10*g("relevance") + 0.08*g("faces"))
+    composite = composite_score
     floor = A.get("score_floor", 0.0)
     pace_budget = est_photo_seconds(S)              # durée/photo estimée selon rythme + tempo (durée cible respectée)
     target = S["target_duration"]
@@ -792,6 +865,32 @@ def ai_select(sb_path, target, order, model, force, no_vlm):
         nn = max(1, len(comps) - 1)
         for c in photo_pool:
             c["ai_score"] = round(2 + (_bs.bisect_left(comps, composite(c)) / nn) * 8, 1)
+    # ---- Re-classement COMPARATIF du haut du panier (« pick the best », groupes de 4) ----
+    # bonus dégressif sur le tri final uniquement (_rank_bonus, PAS sur ai_score affiché).
+    # Garde-fous : flag S["rerank"], VLM local avec .rank (le worker distant n'expose que /score),
+    # et tout échec -> AUCUN effet (les bonus ne sont posés qu'en fin de passe réussie).
+    for c in photo_pool: c.pop("_rank_bonus", None)      # purge d'anciens bonus (re-run)
+    if S.get("rerank", True) and vlm and getattr(vlm, "ok", False) and hasattr(vlm, "rank") and len(photo_pool) > 1:
+        try:
+            top = sorted(photo_pool, key=lambda c: -composite(c))[:min(24, len(photo_pool))]
+            bonus, pending = (0.6, 0.3, 0.1, 0.0), {}
+            for g0 in range(0, len(top), 4):
+                grp = top[g0:g0 + 4]
+                if len(grp) < 2: break                  # classer 1 photo n'a pas de sens
+                rps = []
+                for j, cc in enumerate(grp):            # miniatures (mêmes tailles que la notation)
+                    rp = os.path.join(tmpd, f"rank_{g0 + j}.jpg")
+                    _load_rgb_1024(cc["file"], A["vlm_long_edge"]).save(rp, quality=90)
+                    rps.append(rp)
+                order = vlm.rank(rps)
+                if not order: continue                  # parse raté sur CE groupe -> groupe ignoré
+                for r, idx in enumerate(order):
+                    if idx < len(grp): pending[id(grp[idx])] = bonus[min(r, 3)]
+            for c in top:                               # commit : seulement si toute la passe a tenu
+                if id(c) in pending: c["_rank_bonus"] = pending[id(c)]
+            if pending: print(f"[ai] re-classement comparatif du top {len(top)} appliqué", flush=True)
+        except Exception as e:
+            print(f"[ai] re-ranking indisponible ({e})", flush=True)
     # vidéos : auto-inclut les meilleurs (plafond par source) ; le RESTE reste éditable dans l'UI
     vid_ranked = sorted(new_clips, key=lambda c: -c.get("ai_score", 0))
     cap = A.get("max_subclips_per_video", 3); per_src = {}
@@ -801,10 +900,24 @@ def ai_select(sb_path, target, order, model, force, no_vlm):
         if per_src.get(v["file"], 0) >= cap: continue
         chosen.append(v); per_src[v["file"]] = per_src.get(v["file"], 0) + 1
         used += v.get("duration", 3.0)
-    # photos : best-of pour le reste, dédup perceptuelle (pHash) + sémantique (légende)
+    # photos : best-of pour le reste, dédup perceptuelle (pHash) + sémantique (légende + DINOv2)
     strong = [c for c in photo_pool if c.get("ai_score", 0) >= floor]
-    ranked_p = sorted(strong if len(strong) >= 6 else photo_pool, key=lambda c: -composite(c))
-    seen_hash, seen_cap = [], set()
+    ranked_p = sorted(strong if len(strong) >= 6 else photo_pool,
+                      key=lambda c: -(composite(c) + c.get("_rank_bonus", 0.0)))
+    # embeddings DINOv2 pour attraper les quasi-doublons (recadrage, rafale) que le pHash rate ;
+    # on réutilise le cache de scene_cluster s'il existe, sinon on recalcule (ViT-S rapide).
+    scache_p = os.path.join(os.path.dirname(os.path.abspath(sb_path)), "work", ".scene_cache.json")
+    try: scache = json.load(open(scache_p)) if os.path.exists(scache_p) else {}
+    except Exception: scache = {}
+    def photo_emb(c):
+        import numpy as np
+        ent = scache.get(file_key(c["file"]))
+        if ent and ent.get("emb"):
+            e = np.asarray(ent["emb"], np.float32); return e / (np.linalg.norm(e) + 1e-8)
+        try: return dino_embed(c["file"])          # None si ONNX/modèle indisponible -> dédup no-op
+        except Exception: return None
+    dcos = float(A.get("dino_dup_cos", 0.92))
+    seen_hash, seen_cap, seen_emb = [], set(), []
     for c in ranked_p:
         if used >= target: break
         cap = " ".join((c.get("caption") or c.get("ai_caption") or "").lower().split())
@@ -814,6 +927,10 @@ def ai_select(sb_path, target, order, model, force, no_vlm):
             if any((ph - p) <= A["phash_hamming_max"] for p in seen_hash): continue
             seen_hash.append(ph)
         except Exception: pass
+        emb = photo_emb(c)
+        if emb is not None:
+            if any(float(emb @ e) > dcos for e in seen_emb): continue   # doublon sémantique
+            seen_emb.append(emb)
         if cap: seen_cap.add(cap)
         chosen.append(c); used += pace_budget
     if not chosen: chosen = ranked_p[:10]
@@ -842,8 +959,10 @@ def ai_select(sb_path, target, order, model, force, no_vlm):
     nvi = sum(1 for c in final if c["type"]=="video")
     nblur = sum(1 for c in photos if c.get("prefilter_reason")=="blur")
     ndup = sum(1 for c in photos if c.get("prefilter_reason")=="dup")
+    neye = sum(1 for c in photos if c.get("prefilter_reason") in ("eyes", "softface"))
     print(f"[ai] gardé {len(final)}/{n_scored} plans (~{used:.0f}s) : {nph} photos + {nvi} sous-clips vidéo | "
-          f"écartés : {nblur} flous, {ndup} doublons, {max(0,n_scored-len(final)-nvi)} plus faibles.")
+          f"écartés : {nblur} flous, {ndup} doublons, {neye} yeux fermés/visages flous, "
+          f"{max(0,n_scored-len(final)-nvi)} plus faibles.")
     print(f"[ai] ordre = {S['order']}. Édite {sb_path} puis : render")
 
 def order_clips(clips, mode):
