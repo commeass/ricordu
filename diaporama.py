@@ -405,8 +405,10 @@ class VLM:
         """Classement COMPARATIF de N photos (multi-image). Renvoie les indices 0-based
         du meilleur au moins bon, ou None si le modèle/parse échoue (l'appelant gère)."""
         n = len(paths)
-        prompt = (f"Rank these {n} photos from best to worst for a family montage. "
-                  'Answer ONLY {"order":[indices 0-based]}')
+        prompt = (f"You are ranking {n} photos (numbered 0 to {n-1}, in the order given) for a family montage. "
+                  "Answer with ONLY one minified JSON object, no prose, no markdown:\n"
+                  f'{{"order":[the {n} photo numbers sorted from BEST to WORST]}}\n'
+                  "Judge sharpness, composition, emotion and how special the moment is.")
         try:
             formatted = self._apply(self.processor, self.config, prompt,
                                     num_images=n, enable_thinking=False)
@@ -414,12 +416,15 @@ class VLM:
             formatted = self._apply(self.processor, self.config, prompt, num_images=n)
         try:
             out = self._generate(self.model, self.processor, formatted, image=list(paths),
-                                 max_tokens=80, temperature=0.0, verbose=False)
+                                 max_tokens=120, temperature=0.0, verbose=False)
         except TypeError:
             out = self._generate(self.model, self.processor, formatted, list(paths),
-                                 max_tokens=80, temperature=0.0, verbose=False)
+                                 max_tokens=120, temperature=0.0, verbose=False)
         text = out.text if hasattr(out, "text") else str(out)
-        return parse_rank_json(text, n)
+        order = parse_rank_json(text, n)
+        if order is None:                     # diagnostic (log du worker) : voir CE que le modèle a répondu
+            print(f"[vlm] rank : parse raté sur « {text[:220]} »", flush=True)
+        return order
 
 def parse_score_json(text):
     # retire un bloc <think>...</think> éventuel, prend le dernier {...} parseable
@@ -435,18 +440,27 @@ def parse_score_json(text):
     return {"score": 0.0, "caption": "", "tags": [], "reason": "parse_error"}
 
 def parse_rank_json(text, n):
-    """Extrait {"order":[...]} d'une sortie VLM (bruit <think> toléré). Renvoie une liste
+    """Extrait un classement d'une sortie VLM : {"order":[...]} OU un tableau nu [0,2,1,3]
+    (le modèle répond souvent sans l'objet). Bruit <think> toléré. Renvoie une liste
     d'indices 0-based valides et dédupliqués (permutation partielle acceptée), ou None."""
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    def clean(order):
+        if not isinstance(order, list): return None
+        seen, out = set(), []
+        for v in order:
+            try: i = int(v)
+            except Exception: continue
+            if 0 <= i < n and i not in seen: seen.add(i); out.append(i)
+        return out or None
     for c in reversed(re.findall(r"\{[^{}]*\}", text, flags=re.S)):
         try:
-            order = json.loads(c).get("order")
-            if not isinstance(order, list): continue
-            seen, out = set(), []
-            for v in order:
-                i = int(v)
-                if 0 <= i < n and i not in seen: seen.add(i); out.append(i)
-            if out: return out
+            got = clean(json.loads(c).get("order"))
+            if got: return got
+        except Exception: continue
+    for c in reversed(re.findall(r"\[[\d,\s]+\]", text)):
+        try:
+            got = clean(json.loads(c))
+            if got: return got
         except Exception: continue
     return None
 
@@ -498,13 +512,43 @@ class VLMRemote:
         except Exception:
             self.ok = False
 
+    _fails = 0                                # échecs CONSÉCUTIFS : 1-2 tolérés (photo notée 0), 3 -> abandon net
+
     def score(self, img_path):
-        import urllib.request
+        import urllib.request, urllib.error
         req = urllib.request.Request(self.url + "/score",
                                      data=json.dumps({"path": os.path.abspath(img_path)}).encode(),
                                      headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=120) as r:   # généreux : ~1 image à la fois
-            return json.loads(r.read().decode("utf-8", "ignore"))
+        err = None
+        for attempt in (1, 2):                # 1 retry : un raté isolé ne coûte qu'une photo
+            try:
+                with urllib.request.urlopen(req, timeout=120) as r:   # généreux : ~1 image à la fois
+                    d = json.loads(r.read().decode("utf-8", "ignore"))
+                VLMRemote._fails = 0
+                return d
+            except urllib.error.HTTPError as e:
+                try: err = json.loads(e.read().decode("utf-8", "ignore")).get("error", str(e))
+                except Exception: err = str(e)
+            except Exception as e:
+                err = str(e)
+            time.sleep(1)
+        VLMRemote._fails += 1
+        if VLMRemote._fails >= 3:             # worker durablement KO -> mieux vaut échouer FORT que tout noter 0
+            raise RuntimeError(f"worker VLM défaillant : {err}")
+        print(f"[vlm] échec distant ({err}) -> photo ignorée", flush=True)
+        return {"score": 0.0, "caption": "", "tags": [], "reason": "remote_error"}
+
+    def rank(self, paths):
+        """Classement comparatif via le worker. None si indisponible (vieux worker, échec) -> groupe ignoré."""
+        import urllib.request
+        try:
+            req = urllib.request.Request(self.url + "/rank",
+                                         data=json.dumps({"paths": [os.path.abspath(p) for p in paths]}).encode(),
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=240) as r:   # N images = prompt lourd
+                return json.loads(r.read().decode("utf-8", "ignore")).get("order")
+        except Exception:
+            return None
 
 def vlm_serve(port, idle_timeout, model=None):
     """Worker VLM persistant : charge le modèle UNE fois puis sert /health et /score en HTTP local
@@ -518,11 +562,12 @@ def vlm_serve(port, idle_timeout, model=None):
             def score(self, p):
                 return {"score": 7, "sharpness": 7, "composition": 7, "faces": 7, "moment": 7,
                         "relevance": 7, "beauty": 7, "aerial": False, "caption": "test", "tags": []}
+            def rank(self, paths):
+                return list(range(len(paths)))
         vlm = _Mock(); print("[vlm_serve] mode MOCK (aucun modèle chargé)", flush=True)
     else:
         vlm = VLM(model_id)
     last = [time.time()]                       # horodatage de la dernière requête (timer d'inactivité)
-    lock = threading.Lock()                    # une inférence à la fois (le GPU n'aime pas le parallèle)
 
     class H(http.server.BaseHTTPRequestHandler):
         def _send(self, code, obj):
@@ -536,19 +581,24 @@ def vlm_serve(port, idle_timeout, model=None):
             else: self._send(404, {"error": "not found"})
         def do_POST(self):
             last[0] = time.time()
-            if self.path != "/score": self._send(404, {"error": "not found"}); return
+            if self.path not in ("/score", "/rank"): self._send(404, {"error": "not found"}); return
             try:
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n).decode("utf-8", "ignore"))
                 if not vlm.ok: self._send(503, {"error": "modèle non chargé"}); return
-                with lock: d = vlm.score(body.get("path", ""))
+                if self.path == "/rank":
+                    d = {"order": vlm.rank(body.get("paths") or [])}
+                else:
+                    d = vlm.score(body.get("path", ""))
                 last[0] = time.time()          # réarme APRÈS l'inférence (elle peut être longue)
                 self._send(200, d)
             except Exception as e:
                 self._send(500, {"error": str(e)[:200]})
         def log_message(self, *a): pass        # pas de log HTTP verbeux
 
-    srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), H)
+    # MONO-thread obligatoire : les streams GPU de MLX sont liés au thread qui a chargé le modèle
+    # (ThreadingHTTPServer -> « There is no Stream(gpu, 1) in current thread »). Une requête à la fois.
+    srv = http.server.HTTPServer(("127.0.0.1", port), H)
     def reaper():                              # coupe le worker quand plus personne ne s'en sert
         step = max(1.0, min(5.0, idle_timeout / 5))
         while True:
@@ -955,7 +1005,7 @@ def ai_select(sb_path, target, order, model, force, no_vlm):
             c["ai_score"] = round(2 + (_bs.bisect_left(comps, composite(c)) / nn) * 8, 1)
     # ---- Re-classement COMPARATIF du haut du panier (« pick the best », groupes de 4) ----
     # bonus dégressif sur le tri final uniquement (_rank_bonus, PAS sur ai_score affiché).
-    # Garde-fous : flag S["rerank"], VLM local avec .rank (le worker distant n'expose que /score),
+    # Garde-fous : flag S["rerank"], .rank dispo (VLM local, ou worker via /rank — None si vieux worker),
     # et tout échec -> AUCUN effet (les bonus ne sont posés qu'en fin de passe réussie).
     for c in photo_pool: c.pop("_rank_bonus", None)      # purge d'anciens bonus (re-run)
     if S.get("rerank", True) and vlm and getattr(vlm, "ok", False) and hasattr(vlm, "rank") and len(photo_pool) > 1:
