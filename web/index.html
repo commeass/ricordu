@@ -72,6 +72,15 @@
         </div>
       </div>
       <div class="opt">
+        <label>Format</label>
+        <div class="seg" id="format">
+          <button data-v="16:9" class="on">16:9</button>
+          <button data-v="9:16">9:16 vertical</button>
+          <button data-v="1:1">1:1 carré</button>
+        </div>
+        <div class="muted" style="margin-top:6px;font-size:12px">9:16 pour stories/WhatsApp</div>
+      </div>
+      <div class="opt">
         <label>Finesse des scènes · <span class="val" id="sceneVal">0.50</span></label>
         <input type="range" id="scenethr" min="0.30" max="0.70" step="0.05" value="0.50">
         <div class="muted" style="margin-top:6px;font-size:12px">Mode « Par scène » : regroupe les plans d'une même scène (DINOv2 + couleur). + bas = scènes + fines</div>
@@ -131,6 +140,13 @@
 
   <!-- Rapports -->
   <div id="reports"></div>
+
+  <!-- Rendus précédents -->
+  <div class="card" id="histCard" style="display:none">
+    <h2>Rendus précédents</h2>
+    <video id="histPlayer" controls playsinline></video>
+    <div id="histList"></div>
+  </div>
 
   <!-- Éditeur de sélection -->
   <div id="editor"></div>
