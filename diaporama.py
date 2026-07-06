@@ -9,7 +9,7 @@ diaporama.py — pipeline locale photo/vidéo -> montage narratif (style "Souven
 
 Tout est 100% local. Le modèle de vision est Qwen3.6-35B-A3B-4bit via MLX.
 """
-import os, sys, json, argparse, subprocess, math, re, hashlib, tempfile, shutil
+import os, sys, json, argparse, subprocess, math, re, hashlib, tempfile, shutil, time
 from datetime import datetime
 
 # --- Modèles partagés ---
@@ -482,6 +482,85 @@ def composite_score(c):
     if fs is not None and fs <= 4: base *= 0.85
     return base
 
+# ----------------------------------------------------------------------------- worker VLM persistant
+class VLMRemote:
+    """Client vers un worker VLM partagé (commande vlm_serve) : le modèle 20 Go reste chargé
+    entre deux sélections -> plus de 1-2 min de rechargement à chaque ai_select."""
+    def __init__(self, url):
+        import urllib.request
+        self.url = url.rstrip("/"); self.ok = False
+        try:
+            with urllib.request.urlopen(self.url + "/health", timeout=5) as r:
+                d = json.loads(r.read().decode("utf-8", "ignore"))
+            self.ok = bool(d.get("ok"))
+            if self.ok: print(f"[vlm] notation via worker partagé ({d.get('model','?')}) sur {self.url}", flush=True)
+        except Exception:
+            self.ok = False
+
+    def score(self, img_path):
+        import urllib.request
+        req = urllib.request.Request(self.url + "/score",
+                                     data=json.dumps({"path": os.path.abspath(img_path)}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=120) as r:   # généreux : ~1 image à la fois
+            return json.loads(r.read().decode("utf-8", "ignore"))
+
+def vlm_serve(port, idle_timeout, model=None):
+    """Worker VLM persistant : charge le modèle UNE fois puis sert /health et /score en HTTP local
+    (stdlib uniquement). S'auto-termine après idle_timeout s sans requête (libère ~20 Go de RAM).
+    RICORDU_VLM_MOCK=1 -> pas de chargement, scores factices (tests)."""
+    import http.server, threading
+    model_id = model or MODEL_DEFAULT
+    if os.environ.get("RICORDU_VLM_MOCK") == "1":
+        class _Mock:
+            ok = True
+            def score(self, p):
+                return {"score": 7, "sharpness": 7, "composition": 7, "faces": 7, "moment": 7,
+                        "relevance": 7, "beauty": 7, "aerial": False, "caption": "test", "tags": []}
+        vlm = _Mock(); print("[vlm_serve] mode MOCK (aucun modèle chargé)", flush=True)
+    else:
+        vlm = VLM(model_id)
+    last = [time.time()]                       # horodatage de la dernière requête (timer d'inactivité)
+    lock = threading.Lock()                    # une inférence à la fois (le GPU n'aime pas le parallèle)
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def _send(self, code, obj):
+            data = json.dumps(obj, ensure_ascii=False).encode()
+            self.send_response(code); self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data))); self.end_headers()
+            self.wfile.write(data)
+        def do_GET(self):
+            last[0] = time.time()
+            if self.path == "/health": self._send(200, {"ok": bool(vlm.ok), "model": model_id})
+            else: self._send(404, {"error": "not found"})
+        def do_POST(self):
+            last[0] = time.time()
+            if self.path != "/score": self._send(404, {"error": "not found"}); return
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(n).decode("utf-8", "ignore"))
+                if not vlm.ok: self._send(503, {"error": "modèle non chargé"}); return
+                with lock: d = vlm.score(body.get("path", ""))
+                last[0] = time.time()          # réarme APRÈS l'inférence (elle peut être longue)
+                self._send(200, d)
+            except Exception as e:
+                self._send(500, {"error": str(e)[:200]})
+        def log_message(self, *a): pass        # pas de log HTTP verbeux
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", port), H)
+    def reaper():                              # coupe le worker quand plus personne ne s'en sert
+        step = max(1.0, min(5.0, idle_timeout / 5))
+        while True:
+            time.sleep(step)
+            if time.time() - last[0] > idle_timeout:
+                print(f"[vlm_serve] inactif depuis {idle_timeout:.0f}s -> arrêt (RAM libérée)", flush=True)
+                srv.shutdown(); return
+    threading.Thread(target=reaper, daemon=True).start()
+    print(f"[vlm_serve] prêt sur http://127.0.0.1:{port} (ok={vlm.ok}, idle-timeout {idle_timeout:.0f}s)", flush=True)
+    try: srv.serve_forever()
+    except KeyboardInterrupt: pass
+    srv.server_close()
+
 def cv_only_score(pil_img, blur):
     """Note de secours sans VLM : netteté + luminosité + visages."""
     import cv2, numpy as np
@@ -730,7 +809,11 @@ def ai_select(sb_path, target, order, model, force, no_vlm):
     cache_path = os.path.join(os.path.dirname(os.path.abspath(sb_path)), ".ai_cache.json")
     cache = json.load(open(cache_path)) if os.path.exists(cache_path) else {}
 
-    vlm = None if no_vlm else VLM(model or A["model"])
+    # worker partagé si dispo (RICORDU_VLM_URL + /health ok), sinon chargement local classique
+    vlm = None
+    if not no_vlm:
+        _rem = VLMRemote(os.environ["RICORDU_VLM_URL"]) if os.environ.get("RICORDU_VLM_URL") else None
+        vlm = _rem if (_rem and _rem.ok) else VLM(model or A["model"])
     tmpd = tempfile.mkdtemp(prefix="diapo_")
     photos = [c for c in sb["clips"] if c["type"] == "photo"]
     videos = [c for c in sb["clips"] if c["type"] == "video"]
@@ -1285,11 +1368,32 @@ def xfade_concat(segments, settings, out, end_fade=True):
     return True
 
 def analyze_beats(path):
+    """Tempo + temps des beats, avec cache disque transparent (<dossier du morceau>/.beats_cache.json) :
+    le même fichier est analysé jusqu'à 3x par montage -> on ne paie librosa qu'une seule fois."""
+    cpath = os.path.join(os.path.dirname(os.path.abspath(path)), ".beats_cache.json")
+    key = None
+    try:
+        st = os.stat(path)
+        key = f"{os.path.basename(path)}::{int(st.st_mtime)}::{st.st_size}"
+        ent = json.load(open(cpath)).get(key)
+        if ent: return float(ent["tempo"]), [float(x) for x in ent["beats"]]
+    except Exception:
+        pass                                    # cache absent/cassé -> recalcul
     import librosa, numpy as np
     y, sr = librosa.load(path, sr=22050, mono=True)
     tempo, beats = librosa.beat.beat_track(y=y, sr=sr)
     tempo = float(np.atleast_1d(tempo)[0])
     bt = [float(x) for x in librosa.frames_to_time(beats, sr=sr)]
+    try:
+        cache = {}
+        try: cache = json.load(open(cpath))
+        except Exception: pass
+        d = os.path.dirname(cpath)              # prune : fichiers disparus du dossier
+        cache = {k: v for k, v in cache.items() if os.path.exists(os.path.join(d, k.split("::")[0]))}
+        if key: cache[key] = {"tempo": tempo, "beats": bt}
+        json.dump(cache, open(cpath, "w"))
+    except Exception:
+        pass
     return tempo, bt
 
 def beat_strengths(path, beats):
@@ -1475,12 +1579,27 @@ def mix_music(base_video, music, intervals, S, out):
         print("[render] !! échec musique:", rr.stderr.decode('utf-8','ignore')[-500:]); return False
     return True
 
+def _purge_work(workdir, max_age_h=48):
+    """Ménage : supprime les fichiers temporaires de work/ plus vieux que max_age_h heures.
+    Les .json (caches type .scene_cache.json) sont préservés."""
+    try:
+        lim = time.time() - max_age_h * 3600
+        for e in os.scandir(workdir):
+            try:
+                if e.is_file() and not e.name.endswith(".json") and e.stat().st_mtime < lim:
+                    os.remove(e.path)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 def render(sb_path, out, music=None, no_beat=False):
     sb = json.load(open(sb_path)); S = sb["settings"]
     if music: S["music"] = music
     music = S.get("music")
     workdir = os.path.join(os.path.dirname(os.path.abspath(sb_path)), "work")
     os.makedirs(workdir, exist_ok=True)
+    _purge_work(workdir)                                   # vieux segments (>48h) -> poubelle
     order = S.get("order", "chrono")
     if S.get("rhythm") == "recit" and order != "manual":   # Récit force la chrono, sauf si ordre manuel imposé
         order = "chrono"
@@ -1626,10 +1745,15 @@ def main():
     p2.add_argument("--no-vlm", action="store_true")
     p3 = sub.add_parser("render"); p3.add_argument("storyboard"); p3.add_argument("-o", default="montage.mp4")
     p3.add_argument("--music", default=None); p3.add_argument("--no-beat", action="store_true")
+    p4 = sub.add_parser("vlm_serve")            # worker VLM persistant (modèle chargé une seule fois)
+    p4.add_argument("--port", type=int, default=8768)
+    p4.add_argument("--idle-timeout", type=float, default=1800)
+    p4.add_argument("--model", default=None)
     a = ap.parse_args()
     if a.cmd == "scan": scan(a.folder, a.o)
     elif a.cmd == "ai_select": ai_select(a.storyboard, a.target, a.order, a.model, a.force, a.no_vlm)
     elif a.cmd == "render": render(a.storyboard, a.o, a.music, a.no_beat)
+    elif a.cmd == "vlm_serve": vlm_serve(a.port, a.idle_timeout, a.model)
 
 if __name__ == "__main__":
     main()
