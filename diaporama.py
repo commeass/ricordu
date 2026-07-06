@@ -33,6 +33,7 @@ DEFAULTS = {
     "photo_duration": 3.4,
     "transition_duration": 0.3,
     "resolution": [1920, 1080],
+    "format": "16:9",             # 16:9 | 9:16 (vertical stories/WhatsApp) | 1:1 (carré) — l'app fixe resolution
     "fps": 30,
     "music": None,
     "music_volume": 1.0,
@@ -1040,8 +1041,10 @@ def build_segment(clip, idx, settings, workdir, dur_override=None):
         cx, cy = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"      # zoom CENTRÉ -> visages préservés
         SW, SH = 2*W, 2*H                      # sur-échantillonnage 2x -> supprime le tremblement du zoompan
         zp = f"zoompan=z='{z}':d={frames}:x='{cx}':y='{cy}':s={W}x{H}:fps={fps}"
-        if settings.get("photo_fit", "auto") == "auto" and ar < 1.3:
-            # PORTRAIT / CARRÉ : photo entière sur fond flou (aucun rognage = aucun visage coupé)
+        out_ar = W / H                          # aspect de la SORTIE (16:9, 9:16 vertical, 1:1 carré…)
+        if settings.get("photo_fit", "auto") == "auto" and (ar < out_ar * 0.72 or ar > out_ar * 1.6):
+            # aspect trop différent de la sortie (portrait sur 16:9, paysage sur 9:16…) :
+            # photo ENTIÈRE sur fond flou, dans les deux sens (aucun rognage = aucun visage coupé)
             chain = (f"[0:v]split=2[s0][s1];"
                      f"[s0]scale={SW}:{SH}:force_original_aspect_ratio=increase,crop={SW}:{SH},"
                      f"scale=420:-2,boxblur=12,scale={SW}:{SH},eq=brightness=-0.05[bg];"   # flou rapide (via downscale)

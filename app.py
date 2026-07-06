@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 BASE = os.path.dirname(os.path.abspath(__file__))
 PY = os.path.join(BASE, ".venv", "bin", "python")
 RUN = os.path.join(BASE, "run")
+HIST = os.path.join(RUN, "history")
 PROJECTS = os.path.join(BASE, "projects")
 os.makedirs(RUN, exist_ok=True)
 os.makedirs(PROJECTS, exist_ok=True)
@@ -47,6 +48,13 @@ def job_busy():
     return JOB.get("status") == "running" and t is not None and t.is_alive()
 
 def slug(s): return re.sub(r"[^a-zA-Z0-9_-]+", "_", s)[:60]
+
+# ----------------------------------------------------------------- formats d'export
+FORMAT_RES = {"16:9": [1920, 1080], "9:16": [1080, 1920], "1:1": [1080, 1080]}
+def apply_format(S, fmt):
+    """Applique le format d'export (16:9 paysage / 9:16 vertical / 1:1 carré) -> résolution du rendu."""
+    if fmt in FORMAT_RES:
+        S["format"] = fmt; S["resolution"] = list(FORMAT_RES[fmt])
 
 # ----------------------------------------------------------------- musique
 PERSO = os.path.join(BASE, "music", "perso")   # musiques importées / YouTube (hors dépôt git)
@@ -207,6 +215,7 @@ def run_pipeline(opts):
         # injecte les options dans le storyboard
         d = json.load(open(sb)); S = d["settings"]
         S["title"] = opts.get("title") or rep["title"] or os.path.basename(folder.rstrip("/"))
+        apply_format(S, opts.get("format"))
         S["target_duration"] = float(opts.get("target", 150))
         S["order"] = opts.get("order", "chrono")
         _bpc = opts.get("beats_per_clip", 4)
@@ -247,6 +256,26 @@ def run_pipeline(opts):
         JOB.update(status="error")
         emit({"type": "error", "message": str(e)})
 
+def archive_montage(montage, S):
+    """Archive le rendu (succès seulement) dans run/history/ + cover jumelle. Garde les 12 plus récents."""
+    try:
+        os.makedirs(HIST, exist_ok=True)
+        fmt = (S.get("format") or "16:9").replace(":", "x")   # pas de ':' dans un nom de fichier macOS
+        name = f"montage_{time.strftime('%Y%m%d_%H%M%S')}_{fmt}.mp4"
+        shutil.copy2(montage, os.path.join(HIST, name))
+        cov = os.path.join(RUN, "cover.jpg")
+        if os.path.exists(cov):
+            shutil.copy2(cov, os.path.join(HIST, name[:-4] + ".jpg"))
+        # purge : noms horodatés à largeur fixe -> tri lexicographique = tri chronologique
+        for old in sorted(f for f in os.listdir(HIST) if f.endswith(".mp4"))[:-12]:
+            for fn in (old, old[:-4] + ".jpg"):
+                try: os.remove(os.path.join(HIST, fn))
+                except OSError: pass
+        return name
+    except Exception as e:
+        print(f"[history] archivage impossible ({e})")
+        return None
+
 def render_stage(sb_path):
     JOB["stage"] = "render"
     emit({"type": "stage", "stage": "render", "label": "Montage & rendu"})
@@ -262,6 +291,9 @@ def render_stage(sb_path):
     S = json.load(open(sb_path))["settings"]
     music_abs = os.path.join(BASE, S["music"]) if S.get("music") else None
     rep = final_report(sb_path, montage, music_abs) if os.path.exists(montage) else {}
+    if os.path.exists(montage):                       # succès -> une entrée d'historique par rendu
+        h = archive_montage(montage, S)
+        if h: emit({"type": "log", "line": f"[history] archivé -> history/{h}"})
     JOB["reports"]["final"] = rep; JOB["montage"] = montage
     JOB.update(status="done", progress=100)
     emit({"type": "report", "name": "final", "data": rep})
@@ -275,6 +307,7 @@ def run_reselect(includes, opts):
         d = json.load(open(sb_path)); S = d["settings"]
         for k in ("title", "order", "rhythm"):
             if opts.get(k) is not None: S[k] = opts[k]
+        if opts.get("format"): apply_format(S, opts["format"])   # changement de format = simple re-rendu
         if opts.get("beats_per_clip") is not None:
             _bpc = opts["beats_per_clip"]; S["beats_per_clip"] = "auto" if _bpc == "auto" else int(_bpc)
         if opts.get("end_text") is not None: S["end_text"] = opts["end_text"] or None
@@ -454,6 +487,51 @@ def media_montage(t: str = ""):
 def media_cover(t: str = ""):
     p = os.path.join(RUN, "cover.jpg")
     return FileResponse(p) if os.path.exists(p) else Response(status_code=404)
+
+# ----------------------------------------------------------------- historique des rendus
+_HIST_RE = re.compile(r"^montage_[0-9]{8}_[0-9]{6}_[0-9x]+\.(mp4|jpg)$")
+def _hist_safe(name):
+    """Nom d'historique valide : aucun chemin (pas de / ni ..) + whitelist stricte -> pas de traversal."""
+    return bool(name) and os.path.basename(name) == name and bool(_HIST_RE.match(name))
+
+@app.get("/api/history")
+def api_history():
+    from datetime import datetime
+    items = []
+    if os.path.isdir(HIST):
+        for f in sorted(os.listdir(HIST), reverse=True):     # horodaté -> récent d'abord
+            if not f.endswith(".mp4") or not _hist_safe(f): continue
+            p = os.path.join(HIST, f)
+            m = re.match(r"^montage_(\d{8})_(\d{6})_([0-9x]+)\.mp4$", f)
+            when = ""
+            if m:
+                try: when = datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").strftime("%d/%m/%Y %H:%M")
+                except ValueError: pass
+            items.append({"name": f, "when": when,
+                          "size_mb": round(os.path.getsize(p) / 1e6, 1),
+                          "duration": _probe_dur(p),
+                          "format": m.group(3).replace("x", ":") if m else "",
+                          "cover": os.path.exists(os.path.join(HIST, f[:-4] + ".jpg"))})
+    return {"items": items}
+
+@app.get("/media/history/{name}")
+def media_history(name: str):
+    if not _hist_safe(name): return Response(status_code=403)
+    p = os.path.join(HIST, name)
+    return FileResponse(p) if os.path.exists(p) else Response(status_code=404)
+
+@app.post("/api/delete-history")
+async def api_delete_history(req: Request):
+    body = await req.json()
+    name = body.get("name") or ""
+    if not _hist_safe(name) or not name.endswith(".mp4"):
+        return JSONResponse({"error": "nom invalide"}, status_code=400)
+    p = os.path.join(HIST, name)
+    if not os.path.exists(p): return JSONResponse({"error": "introuvable"}, status_code=404)
+    os.remove(p)
+    jpg = p[:-4] + ".jpg"
+    if os.path.exists(jpg): os.remove(jpg)
+    return {"ok": True}
 
 @app.get("/api/selection")
 def api_selection():

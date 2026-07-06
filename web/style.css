@@ -145,6 +145,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .moments .m{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px}
 .moments .m b{color:var(--accent);font-variant-numeric:tabular-nums}
 video{width:100%;border-radius:12px;margin-top:6px;background:#000}
+#reports video{max-height:70vh}   /* formats verticaux (9:16) : la vidéo ne remplit pas tout l'écran */
 .muted{color:var(--muted);font-size:13px}
 .pill{display:inline-flex;gap:6px;align-items:center;background:var(--bg2);border:1px solid var(--line);
   border-radius:8px;padding:4px 10px;font-size:12px;color:var(--muted);margin-right:8px}
@@ -207,6 +208,21 @@ video{width:100%;border-radius:12px;margin-top:6px;background:#000}
 .pdel{background:transparent;border:1px solid var(--line);color:var(--muted);width:34px;height:34px;
   border-radius:9px;font-size:13px}
 .pdel:hover{border-color:#e0524f;color:#e0524f;background:rgba(224,82,79,.08)}
+
+/* rendus précédents (historique) */
+#histPlayer{display:none;max-height:70vh;margin:0 0 12px}
+#histList{display:flex;flex-direction:column;gap:8px}
+.hitem{display:flex;align-items:center;gap:12px;background:var(--bg2);border:1px solid var(--line);
+  border-radius:11px;padding:8px 12px}
+.hthumb{width:76px;height:46px;object-fit:cover;border-radius:7px;background:var(--card2);flex:none}
+.hempty{display:grid;place-items:center;color:var(--muted2);font-size:18px}
+.hmeta{overflow:hidden;margin-right:auto}
+.hmeta .ht{font-size:14px;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hmeta .hs{font-size:12px;color:var(--muted)}
+.hbtn{background:transparent;border:1px solid var(--line);color:var(--muted);width:34px;height:34px;
+  border-radius:9px;font-size:13px;display:grid;place-items:center;flex:none;cursor:pointer}
+.hbtn:hover{border-color:var(--accent);color:var(--txt)}
+.hdel:hover{border-color:#e0524f;color:#e0524f;background:rgba(224,82,79,.08)}
 
 /* modale aperçu vidéo */
 .modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:50;

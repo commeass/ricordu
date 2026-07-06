@@ -1,5 +1,5 @@
 const $ = s => document.querySelector(s);
-const state = { folder:null, event:"", beats:"auto", rhythm:"fixe", order:"chrono", captions:false, hw:true,
+const state = { folder:null, event:"", beats:"auto", rhythm:"fixe", order:"chrono", format:"16:9", captions:false, hw:true,
                 videoAudio:"cut", sceneThr:0.5, endPhoto:null, coverPhoto:null, catalog:[], selected:new Set(), suggested:new Set(), mood:"tous", manualOrder:false };
 
 // ---- helpers ----
@@ -19,6 +19,7 @@ function calerSurMusique(){   // mode « Sur la musique » : la durée du montag
   $("#dur").value = v; $("#durVal").textContent = fmtDur(v);
 }
 seg($("#order"),  v => state.order = v);
+seg($("#format"), v => state.format = v);   // 16:9 / 9:16 vertical / 1:1 carré
 seg($("#videoaudio"), v => state.videoAudio = v);
 $("#capSw").onclick = () => { state.captions=!state.captions; $("#capSw").classList.toggle("on", state.captions); };
 $("#hwSw").onclick  = () => { state.hw=!state.hw; $("#hwSw").classList.toggle("on", state.hw); };
@@ -176,7 +177,7 @@ $("#runBtn").onclick = () => {
   if(!state.folder) return;
   const opts = { folder:state.folder, title:$("#title").value.trim()||state.event,
     end_text:$("#endtext").value.trim(), end_photo:state.endPhoto, cover_photo:state.coverPhoto,
-    target:+$("#dur").value, beats_per_clip:state.beats,
+    target:+$("#dur").value, beats_per_clip:state.beats, format:state.format,
     rhythm:state.rhythm, video_share:(+$("#vid").value)/100, order:state.order, captions:state.captions,
     hardware_accel:state.hw, video_audio:state.videoAudio, scene_threshold_ai:state.sceneThr, music:[...state.selected] };
   $("#runBtn").disabled = true; $("#runBtn").textContent="Montage en cours…";
@@ -201,7 +202,7 @@ function listen(){
     if(ev.type==="log"){ const l=$("#log"); l.innerHTML+=ev.line+"<br>"; l.scrollTop=l.scrollHeight; }
     if(ev.type==="report") report(ev.name, ev.data);
     if(ev.type==="done"){ setStep("render",true); $("#barFill").style.width="100%";
-      $("#detail").textContent="Terminé ✓"; resetRun(); es.close(); loadSelection(); }
+      $("#detail").textContent="Terminé ✓"; resetRun(); es.close(); loadSelection(); loadHistory(); }
     if(ev.type==="error"){ $("#detail").textContent="Erreur : "+ev.message; resetRun(); es.close(); }
   };
 }
@@ -401,11 +402,41 @@ function redo(){
   fetch("/api/reselect",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({includes:inc, title:$("#title").value.trim(),
       end_text:$("#endtext").value.trim(), end_photo:state.endPhoto, cover_photo:state.coverPhoto,
-      rhythm:state.rhythm, beats_per_clip:state.beats,
+      rhythm:state.rhythm, beats_per_clip:state.beats, format:state.format,
       order: state.manualOrder ? "manual" : state.order, order_ids,
       captions:state.captions, hardware_accel:state.hw, video_audio:state.videoAudio,
       scene_threshold_ai:state.sceneThr, music:[...state.selected]})})
     .then(r=>r.json()).then(r=>{ if(r.error){alert(r.error);$("#redo").disabled=false;$("#redo").textContent="Relancer le montage";} else listen(); });
+}
+
+// ---- historique des rendus (run/history/) ----
+function loadHistory(){
+  fetch("/api/history").then(r=>r.json()).then(d=>{
+    const items=d.items||[], card=$("#histCard"); if(!card) return;
+    if(!items.length){ card.style.display="none"; return; }
+    card.style.display="block";
+    $("#histList").innerHTML = items.map(h=>`
+      <div class="hitem" data-name="${h.name}">
+        ${h.cover?`<img class="hthumb" loading="lazy" src="/media/history/${encodeURIComponent(h.name.replace(/\.mp4$/,".jpg"))}">`
+                 :`<div class="hthumb hempty">🎞</div>`}
+        <div class="hmeta"><div class="ht">${h.when||h.name}</div>
+          <div class="hs">${fmtDur(Math.round(h.duration||0))} · ${h.format||"—"} · ${h.size_mb} Mo</div></div>
+        <button class="hbtn hplay" title="Lire">▶</button>
+        <a class="hbtn" href="/media/history/${encodeURIComponent(h.name)}" download="${h.name}" title="Télécharger">⬇</a>
+        <button class="hbtn hdel" title="Supprimer">🗑</button>
+      </div>`).join("");
+    $("#histList").querySelectorAll(".hplay").forEach(b=>b.onclick=()=>{
+      const v=$("#histPlayer"); v.style.display="block";
+      v.src="/media/history/"+encodeURIComponent(b.closest(".hitem").dataset.name);
+      v.play(); v.scrollIntoView({behavior:"smooth",block:"nearest"});
+    });
+    $("#histList").querySelectorAll(".hdel").forEach(b=>b.onclick=()=>{
+      const name=b.closest(".hitem").dataset.name;
+      if(!confirm("Supprimer ce rendu ?")) return;
+      fetch("/api/delete-history",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({name})}).then(r=>r.json()).then(()=>loadHistory());
+    });
+  });
 }
 
 // ---- projets ----
@@ -451,3 +482,4 @@ function loadProject(name){
 
 loadCatalog();
 loadProjects();
+loadHistory();
