@@ -111,8 +111,9 @@ flowchart LR
 
 ## ⭐ Fonctionnalités
 
-- 🧠 **Sélection des meilleurs plans par un VLM local** : note 0–10 + légende française.
+- 🧠 **Sélection des meilleurs plans par un VLM local** : note 0–10 + légende française — et le **nombre de photos retenues se cale sur la durée cible** (selon le rythme choisi et le tempo réel du morceau).
 - 🥁 **Beat-sync** : chaque coupe tombe sur un temps, en cuts francs façon Neistat.
+- ⚡ **Rythme Auto** : le nombre de temps par photo s'adapte au **tempo** — morceau rapide → photos tenues plus longtemps, jamais de clignotement.
 - 🔇 **Audio « Neistat »** : la musique se coupe (ou se baisse) pendant les clips vidéo sonores — on entend le son réel — puis revient.
 - ⏱️ **Durée calée sur la musique** : chaque piste affiche sa durée, et un budget en direct prévient si le montage dépasse la musique (ajustement en un clic).
 - 🖼️ **Ken Burns sans couper les visages** : zoom centré et anti-tremblement ; portraits posés en entier sur fond flou.
@@ -120,6 +121,7 @@ flowchart LR
 - ❤️ **Mode RÉCIT** : accélère vers le moment fort (gâteau, bougies), le tient, puis relâche.
 - ✂️ **Découpe vidéo intelligente** pilotée par l'audio (rires, applaudissements) et le mouvement.
 - 🅰️ **Carton-titre et carton de fin éditables** (texte + photo).
+- 🖼️ **Image de couverture au choix** : cliquez 🖼️ sur une photo de la sélection → elle ouvre le film, sort en `cover.jpg` **et s'intègre comme poster du MP4** (fini la vignette de partage noire).
 - 🌐 **Interface web locale** : choix du dossier, progression temps réel, 3 rapports détaillés.
 - 🎵 **Bibliothèque musicale** CC-BY avec suggestion selon l'événement ; mode *Module* (musique par section).
 - 🖊️ **Éditeur de sélection** : inclure/exclure, découper un extrait, **re-rendu sans re-analyse**.
@@ -186,7 +188,7 @@ python diaporama.py render storyboard.json -o montage.mp4 --music music/Carefree
 
 | Réglage | Options |
 |---|---|
-| **Rythme** | Doux · Punchy · Chaque beat · Dynamique · Module · **Récit** |
+| **Rythme** | **Auto ⚡** (calé sur le tempo) · Posé · Doux · Punchy · Chaque beat · Dynamique · Sur la musique ♬ · Module · **Récit** |
 | **Ordre** | Chronologique · Par scène (DINOv2) · Highlights · Narratif |
 | **Son sous la vidéo** | Couper la musique · La baisser (duck) |
 | **Durée** | Calée sur la musique (budget en direct) |

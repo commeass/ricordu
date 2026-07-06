@@ -46,9 +46,11 @@
         <input type="range" id="dur" min="30" max="240" step="5" value="150">
       </div>
       <div class="opt">
-        <label>Rythme des coupes</label>
+        <label>Rythme des coupes — 1 photo toutes les N temps</label>
         <div class="seg" id="rhythm">
-          <button data-v="4" class="on">Doux</button>
+          <button data-v="auto" class="on">Auto ⚡</button>
+          <button data-v="6">Posé</button>
+          <button data-v="4">Doux</button>
           <button data-v="2">Punchy</button>
           <button data-v="1">Chaque beat</button>
           <button data-v="dyn">Dynamique</button>
@@ -56,7 +58,7 @@
           <button data-v="module">Module ♫</button>
           <button data-v="recit">Récit ♥</button>
         </div>
-        <div class="muted" style="margin-top:8px;font-size:12px">Dynamique = accélère au milieu · <b>Sur la musique</b> = le montage épouse la chanson (durée + coupes calées sur l'énergie : intro posée, refrain qui claque) · Module = sections + la musique change (≥2 musiques) · <b>Récit</b> = monte vers le moment fort, le tient, puis relâche</div>
+        <div class="muted" style="margin-top:8px;font-size:12px"><b>Auto</b> = nb de battements par photo calé sur le tempo (morceau rapide → photos tenues plus longtemps, jamais de clignotement) · <b>Posé / Doux / Punchy / Chaque beat</b> = 1 photo toutes les <b>6 / 4 / 2 / 1</b> battement(s) · Dynamique = accélère au milieu · <b>Sur la musique</b> = le montage épouse la chanson (durée + coupes calées sur l'énergie : intro posée, refrain qui claque) · Module = sections + la musique change (≥2 musiques) · <b>Récit</b> = monte vers le moment fort, le tient, puis relâche</div>
       </div>
       <div class="opt">
         <label>Moments vidéo · <span class="val" id="vidVal">30%</span></label>

@@ -610,6 +610,34 @@ def unit_score(u, A):
             A.get("w_motion", 1.5) * mvt)
 
 # ----------------------------------------------------------------------------- AI_SELECT
+def est_photo_seconds(S):
+    """Durée moyenne estimée d'une photo À L'ÉCRAN, pour caler le NOMBRE de photos sur la durée cible.
+    Tient compte du rythme choisi (beats/photo) ET du tempo réel du morceau -> 'durée cible' respectée."""
+    period = 0.62                                   # repli ~96 BPM si pas de musique analysable
+    src = S.get("music") or next((t for t in S.get("music_tracks", []) if t), None)
+    if src and os.path.exists(src):
+        try:
+            tempo, beats = analyze_beats(src)
+            if beats and len(beats) > 4:
+                ds = sorted(beats[i+1] - beats[i] for i in range(len(beats) - 1))
+                period = ds[len(ds)//2]
+            elif tempo and tempo > 0:
+                period = 60.0 / float(tempo)
+        except Exception:
+            pass
+    rhythm = S.get("rhythm", "fixe"); bpc = S.get("beats_per_clip", 4)
+    if bpc == "auto":
+        avg_b = max(1, min(8, round(S.get("min_photo_on_s", 1.7) / max(1e-3, period))))
+    elif rhythm == "song":
+        avg_b = 3.0                                 # ~moyenne SLOW(6)..FAST(1) pondérée par l'énergie
+    elif rhythm == "recit":
+        avg_b = 2.6
+    elif rhythm == "dynamique":
+        avg_b = max(1.0, int(bpc) * 0.6 + 0.4)      # accélère au milieu -> moyenne < bpc
+    else:
+        avg_b = max(1, int(bpc))
+    return max(0.6, avg_b * period)
+
 def ai_select(sb_path, target, order, model, force, no_vlm):
     sb = json.load(open(sb_path))
     S = sb["settings"]; A = S["ai"]
@@ -746,11 +774,14 @@ def ai_select(sb_path, target, order, model, force, no_vlm):
         if not sub: return c.get("ai_score", 7.0)   # vidéos : score du span
         def g(k, d=7.0):
             v = sub.get(k); return float(v) if isinstance(v, (int, float)) else d
-        # pondère les dimensions qui DISCRIMINENT (netteté, composition)
-        return 0.35*g("sharpness") + 0.30*g("composition") + 0.15*g("beauty") + 0.10*g("relevance") + 0.10*g("faces")
+        # pondère les dimensions qui DISCRIMINENT (netteté, composition) + fait remonter les instants forts (moment)
+        return (0.30*g("sharpness") + 0.24*g("composition") + 0.14*g("beauty")
+                + 0.14*g("moment") + 0.10*g("relevance") + 0.08*g("faces"))
     floor = A.get("score_floor", 0.0)
-    pace_budget = 2.6
+    pace_budget = est_photo_seconds(S)              # durée/photo estimée selon rythme + tempo (durée cible respectée)
     target = S["target_duration"]
+    print(f"[ai] cadence ~{pace_budget:.2f}s/photo (rythme={S.get('rhythm','fixe')}, beats/photo={S.get('beats_per_clip',4)}) "
+          f"-> ~{int(target/max(0.6,pace_budget))} photos pour {target:.0f}s", flush=True)
     photo_pool = [c for c in photos if c.get("ai_include")]
     n_scored = len(photo_pool) + len(new_clips)
     # le VLM tasse tout (5-8) -> on ÉTALE les scores photos en percentile du composite (2..10) :
@@ -1182,7 +1213,13 @@ def assign_beat_durations(clips, beats, S, hard=True):
     diffs = sorted(beats[i+1]-beats[i] for i in range(len(beats)-1))
     period = diffs[len(diffs)//2]
     grid = _beat_grid(beats, period, 2400)
-    B = max(1, int(S.get("beats_per_clip", 4)))
+    bpc = S.get("beats_per_clip", 4)
+    if bpc == "auto":
+        # Auto : nb de beats/photo calé sur le TEMPO -> chaque photo reste ~min_photo_on_s à l'écran.
+        # Morceau rapide = période courte -> PLUS de beats par photo (pas de clignotement).
+        B = max(1, min(8, round(S.get("min_photo_on_s", 1.7) / max(1e-3, period))))
+    else:
+        B = max(1, int(bpc))
     dynamic = S.get("rhythm") == "dynamique"
     recit = S.get("rhythm") == "recit"
     song = S.get("rhythm") == "song"
@@ -1385,7 +1422,11 @@ def render(sb_path, out, music=None, no_beat=False):
             print(f"[render] beat sync indispo ({e})"); beat = hard = False
 
     segments = []; meta = []
-    hero = pick_hero(clips) if S.get("title_bg", True) else None
+    cover = S.get("cover_photo")
+    if cover and os.path.exists(cover):
+        hero = cover; print(f"[render] couverture choisie : {os.path.basename(cover)}")
+    else:
+        hero = pick_hero(clips) if S.get("title_bg", True) else None
     t, dttl = make_title(S, workdir, sub, title_dur, bg=hero)
     if t: segments.append((t, dttl)); meta.append(False)
     print(f"[render] {len(clips)} plans -> segments ...", flush=True)
@@ -1427,6 +1468,27 @@ def render(sb_path, out, music=None, no_beat=False):
         if not mix_music(mid, music, intervals, S, out): os.replace(mid, out)
     else:
         os.replace(mid, out)
+
+    # --- Couverture PARTAGEABLE : carton-titre en pleine déf (cover.jpg) + poster embarqué dans le MP4 ---
+    # (la 1re frame du montage est un fondu depuis le noir -> sans poster, la vignette de partage est NOIRE)
+    try:
+        title_png = os.path.join(workdir, "title.png")
+        if os.path.exists(title_png) and os.path.exists(out):
+            cover_jpg = os.path.join(os.path.dirname(os.path.abspath(out)), "cover.jpg")
+            run(["ffmpeg", "-y", "-v", "error", "-i", title_png, "-q:v", "2", cover_jpg])
+            if os.path.exists(cover_jpg):
+                tmp = out + ".cov.mp4"
+                run(["ffmpeg", "-y", "-v", "error", "-i", out, "-i", cover_jpg,
+                     "-map", "0", "-map", "1", "-c", "copy", "-c:v:1", "mjpeg",
+                     "-disposition:v:1", "attached_pic", tmp])
+                if os.path.exists(tmp) and os.path.getsize(tmp) > 0.6 * os.path.getsize(out):
+                    os.replace(tmp, out)                       # poster intégré -> vignette non noire
+                elif os.path.exists(tmp):
+                    os.remove(tmp)                             # repli sûr : on garde le MP4 d'origine
+                print(f"[render] couverture -> {cover_jpg}")
+    except Exception as e:
+        print(f"[render] couverture non générée ({e})")
+
     print(f"[render] OK -> {out}  ({probe_duration(out):.1f}s, {len(segments)} segments dans {workdir}/)")
 
 # ----------------------------------------------------------------------------- CLI

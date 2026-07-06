@@ -1,6 +1,6 @@
 const $ = s => document.querySelector(s);
-const state = { folder:null, event:"", beats:4, rhythm:"fixe", order:"chrono", captions:false, hw:true,
-                videoAudio:"cut", sceneThr:0.5, endPhoto:null, catalog:[], selected:new Set(), suggested:new Set(), mood:"tous", manualOrder:false };
+const state = { folder:null, event:"", beats:"auto", rhythm:"fixe", order:"chrono", captions:false, hw:true,
+                videoAudio:"cut", sceneThr:0.5, endPhoto:null, coverPhoto:null, catalog:[], selected:new Set(), suggested:new Set(), mood:"tous", manualOrder:false };
 
 // ---- helpers ----
 const fmtDur = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
@@ -12,7 +12,7 @@ function seg(el, cb){ el.querySelectorAll("button").forEach(b=>b.onclick=()=>{
 $("#dur").oninput = e => { $("#durVal").textContent = fmtDur(+e.target.value); updateMusicBudget(); };
 $("#vid").oninput = e => $("#vidVal").textContent = e.target.value + "%";
 $("#scenethr").oninput = e => { state.sceneThr = +e.target.value; $("#sceneVal").textContent = (+e.target.value).toFixed(2); };
-seg($("#rhythm"), v => { if(v==="dyn"){ state.rhythm="dynamique"; } else if(v==="module"){ state.rhythm="module"; } else if(v==="recit"){ state.rhythm="recit"; } else if(v==="song"){ state.rhythm="song"; calerSurMusique(); } else { state.rhythm="fixe"; state.beats=+v; } updateMusicBudget(); });
+seg($("#rhythm"), v => { if(v==="dyn"){ state.rhythm="dynamique"; } else if(v==="module"){ state.rhythm="module"; } else if(v==="recit"){ state.rhythm="recit"; } else if(v==="song"){ state.rhythm="song"; calerSurMusique(); } else if(v==="auto"){ state.rhythm="fixe"; state.beats="auto"; } else { state.rhythm="fixe"; state.beats=+v; } updateMusicBudget(); });
 function calerSurMusique(){   // mode « Sur la musique » : la durée du montage = la chanson
   if(!state.selected.size) return;
   const v = Math.max(30, Math.min(240, Math.round(musicAvail() - TITLE_END)));
@@ -175,7 +175,7 @@ if($("#ytAdd")) $("#ytAdd").onclick = async () => {
 $("#runBtn").onclick = () => {
   if(!state.folder) return;
   const opts = { folder:state.folder, title:$("#title").value.trim()||state.event,
-    end_text:$("#endtext").value.trim(), end_photo:state.endPhoto,
+    end_text:$("#endtext").value.trim(), end_photo:state.endPhoto, cover_photo:state.coverPhoto,
     target:+$("#dur").value, beats_per_clip:state.beats,
     rhythm:state.rhythm, video_share:(+$("#vid").value)/100, order:state.order, captions:state.captions,
     hardware_accel:state.hw, video_audio:state.videoAudio, scene_threshold_ai:state.sceneThr, music:[...state.selected] };
@@ -242,8 +242,10 @@ function report(name, d){
         <span class="pill">Résolution <b>${d.resolution||"—"}</b></span>
         <span class="pill">Tempo <b>${d.bpm||"—"} BPM</b></span>
         <span class="pill">Sync cut↔beat <b>${sync}</b></span></div>
-       <video controls src="/media/montage.mp4?t=${Date.now()}"></video>
-       <div style="margin-top:12px"><a href="/media/montage.mp4" download="montage.mp4">⬇ Télécharger le montage</a></div>`));
+       <video controls poster="${d.cover?`/media/cover.jpg?t=${Date.now()}`:''}" src="/media/montage.mp4?t=${Date.now()}"></video>
+       <div style="margin-top:12px;display:flex;gap:16px;flex-wrap:wrap">
+         <a href="/media/montage.mp4" download="montage.mp4">⬇ Télécharger le montage</a>
+         ${d.cover?`<a href="/media/cover.jpg?t=${Date.now()}" download="cover.jpg">🖼️ Image de couverture (partage)</a>`:''}</div>`));
     $("#reports").scrollIntoView({behavior:"smooth"});
   }
 }
@@ -289,6 +291,7 @@ function loadSelection(){
     if(d.title) $("#title").value=d.title;
     if(d.end_text && !$("#endtext").value) $("#endtext").value=d.end_text;
     if(d.end_photo) state.endPhoto=d.end_photo;
+    if(d.cover_photo) state.coverPhoto=d.cover_photo;
     const days=[...new Set(d.clips.map(c=>(c.when||'').slice(0,5)).filter(Boolean))];
     const dayChips = days.length>1
       ? `<div class="moods" id="dayf"><div class="chip on" data-d="tous">tous les jours</div>`
@@ -296,14 +299,15 @@ function loadSelection(){
     const esc=s=>(s||'').replace(/"/g,'&quot;');
     state.manualOrder = false;     // l'ordre fraîchement chargé fait foi
     const cells = d.clips.map((c,i)=>`
-      <div class="cell ${c.include?'on':''} ${c.file===state.endPhoto?'endsel':''}" draggable="true" data-id="${c.id}" data-ord="${i}" data-day="${(c.when||'').slice(0,5)}" data-file="${esc(c.file)}">
+      <div class="cell ${c.include?'on':''} ${c.file===state.endPhoto?'endsel':''} ${c.file===state.coverPhoto?'coversel':''}" draggable="true" data-id="${c.id}" data-ord="${i}" data-day="${(c.when||'').slice(0,5)}" data-file="${esc(c.file)}">
         <img loading="lazy" src="${c.thumb}">
         <span class="sc">${c.score}</span>
         ${c.when?`<span class="when">${c.when}</span>`:''}
         ${c.type==='video'?`<span class="vtag">▶ ${c.range||''}</span>
           <button class="vplay" data-src="${c.src}" data-start="${c.start}" data-dur="${c.dur}">▶</button>
           <button class="cutbtn" data-file="${esc(c.file)}" data-src="${c.src}">✂️ découper</button>`
-        :`<button class="endbtn" title="Choisir comme photo de fin">🏁 fin</button>`}
+        :`<button class="coverbtn" title="Choisir comme image de couverture (début + partage)">🖼️ couv.</button>
+          <button class="endbtn" title="Choisir comme photo de fin">🏁 fin</button>`}
         <span class="tick">✓</span></div>`).join("");
     $("#editor").innerHTML = `<div class="card">
       <h2>Sélection — clique pour inclure / exclure · glisse pour réordonner <span class="muted" id="selCount"></span></h2>
@@ -324,6 +328,9 @@ function loadSelection(){
     });
     $("#editor").querySelectorAll(".endbtn").forEach(b=>b.onclick=ev=>{
       ev.stopPropagation(); markEndPhoto(b.closest(".cell").dataset.file);
+    });
+    $("#editor").querySelectorAll(".coverbtn").forEach(b=>b.onclick=ev=>{
+      ev.stopPropagation(); markCoverPhoto(b.closest(".cell").dataset.file);
     });
     $("#editor").querySelectorAll(".cutbtn").forEach(b=>b.onclick=ev=>{
       ev.stopPropagation(); openCut(b.dataset.file, b.dataset.src);
@@ -380,6 +387,10 @@ function markEndPhoto(file){
   state.endPhoto = (state.endPhoto===file) ? null : file;   // re-clic = annule
   document.querySelectorAll(".cell").forEach(el=>el.classList.toggle("endsel", el.dataset.file===state.endPhoto));
 }
+function markCoverPhoto(file){
+  state.coverPhoto = (state.coverPhoto===file) ? null : file;   // re-clic = annule -> couverture auto (hero)
+  document.querySelectorAll(".cell").forEach(el=>el.classList.toggle("coversel", el.dataset.file===state.coverPhoto));
+}
 function redo(){
   const cells=[...document.querySelectorAll(".cell")];
   const inc={}; cells.forEach(el=>inc[el.dataset.id]=el.classList.contains("on"));
@@ -389,7 +400,7 @@ function redo(){
   $("#barFill").style.width="70%"; $("#progress").scrollIntoView({behavior:"smooth"});
   fetch("/api/reselect",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({includes:inc, title:$("#title").value.trim(),
-      end_text:$("#endtext").value.trim(), end_photo:state.endPhoto,
+      end_text:$("#endtext").value.trim(), end_photo:state.endPhoto, cover_photo:state.coverPhoto,
       rhythm:state.rhythm, beats_per_clip:state.beats,
       order: state.manualOrder ? "manual" : state.order, order_ids,
       captions:state.captions, hardware_accel:state.hw, video_audio:state.videoAudio,
@@ -429,6 +440,7 @@ function loadProject(name){
       if(s.title!=null) $("#title").value=s.title;
       if(s.end_text!=null) $("#endtext").value=s.end_text||"";
       state.endPhoto = s.end_photo || null;
+      state.coverPhoto = s.cover_photo || null;
       if(s.target_duration){ $("#dur").value=s.target_duration; $("#durVal").textContent=fmtDur(+s.target_duration); }
       if(s.video_share!=null){ $("#vid").value=Math.round(s.video_share*100); $("#vidVal").textContent=Math.round(s.video_share*100)+"%"; }
       updateMusicBudget();

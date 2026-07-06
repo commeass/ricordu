@@ -191,6 +191,7 @@ def final_report(sb_path, montage, music):
         rep["sync_max"] = round(max(errs)) if errs else None
     except Exception as e:
         rep["sync_ms"] = None
+    rep["cover"] = os.path.exists(os.path.join(RUN, "cover.jpg"))
     return rep
 
 def run_pipeline(opts):
@@ -208,7 +209,8 @@ def run_pipeline(opts):
         S["title"] = opts.get("title") or rep["title"] or os.path.basename(folder.rstrip("/"))
         S["target_duration"] = float(opts.get("target", 150))
         S["order"] = opts.get("order", "chrono")
-        S["beats_per_clip"] = int(opts.get("beats_per_clip", 4))
+        _bpc = opts.get("beats_per_clip", 4)
+        S["beats_per_clip"] = "auto" if _bpc == "auto" else int(_bpc)
         S["rhythm"] = opts.get("rhythm", "fixe")
         S["video_share"] = float(opts.get("video_share", 0.3))
         S["captions"] = "all" if opts.get("captions") else "none"
@@ -217,6 +219,7 @@ def run_pipeline(opts):
         S["scene_threshold_ai"] = float(opts.get("scene_threshold_ai", 0.5))
         S["end_text"] = opts.get("end_text") or None
         S["end_photo"] = opts.get("end_photo") or None
+        S["cover_photo"] = opts.get("cover_photo") or None
         music_files = opts.get("music", [])
         S["music_tracks"] = list(music_files)   # pistes individuelles (mode module = changement de musique)
         mix = build_music_mix(music_files, os.path.join(RUN, "music_mix.mp3")) if music_files else None
@@ -272,9 +275,11 @@ def run_reselect(includes, opts):
         d = json.load(open(sb_path)); S = d["settings"]
         for k in ("title", "order", "rhythm"):
             if opts.get(k) is not None: S[k] = opts[k]
-        if opts.get("beats_per_clip") is not None: S["beats_per_clip"] = int(opts["beats_per_clip"])
+        if opts.get("beats_per_clip") is not None:
+            _bpc = opts["beats_per_clip"]; S["beats_per_clip"] = "auto" if _bpc == "auto" else int(_bpc)
         if opts.get("end_text") is not None: S["end_text"] = opts["end_text"] or None
         if opts.get("end_photo") is not None: S["end_photo"] = opts["end_photo"] or None
+        if opts.get("cover_photo") is not None: S["cover_photo"] = opts["cover_photo"] or None
         if "captions" in opts: S["captions"] = "all" if opts["captions"] else "none"
         if "hardware_accel" in opts: S["hardware_accel"] = bool(opts["hardware_accel"])
         if opts.get("video_audio"): S["video_audio"] = opts["video_audio"]
@@ -445,6 +450,11 @@ def media_montage(t: str = ""):
     p = os.path.join(RUN, "montage.mp4")
     return FileResponse(p) if os.path.exists(p) else Response(status_code=404)
 
+@app.get("/media/cover.jpg")
+def media_cover(t: str = ""):
+    p = os.path.join(RUN, "cover.jpg")
+    return FileResponse(p) if os.path.exists(p) else Response(status_code=404)
+
 @app.get("/api/selection")
 def api_selection():
     sb_path = os.path.join(RUN, "storyboard.json")
@@ -471,7 +481,8 @@ def api_selection():
             it["start"] = round(c.get("trim_start", 0), 2); it["dur"] = round(c.get("duration", 0), 2)
         out.append(it)
     return {"clips": out, "title": d["settings"].get("title", ""),
-            "end_text": d["settings"].get("end_text") or "", "end_photo": d["settings"].get("end_photo") or ""}
+            "end_text": d["settings"].get("end_text") or "", "end_photo": d["settings"].get("end_photo") or "",
+            "cover_photo": d["settings"].get("cover_photo") or ""}
 
 @app.get("/api/srcvideo")
 def api_srcvideo(file: str):

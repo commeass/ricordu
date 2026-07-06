@@ -174,6 +174,13 @@ video{width:100%;border-radius:12px;margin-top:6px;background:#000}
 .cell.endsel .endbtn{display:none}
 .cell.endsel::after{content:"FIN";position:absolute;bottom:4px;left:4px;font-size:10px;font-weight:700;
   background:var(--warn);color:#241a06;border-radius:6px;padding:2px 7px}
+.cell .coverbtn{position:absolute;bottom:26px;left:4px;font-size:10px;background:rgba(0,0,0,.55);
+  border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:6px;padding:1px 6px;cursor:pointer;opacity:0}
+.cell:hover .coverbtn{opacity:1}
+.cell.coversel{outline:2px solid #3ad29f;outline-offset:-2px}
+.cell.coversel .coverbtn{display:none}
+.cell.coversel::before{content:"COUV";position:absolute;bottom:26px;left:4px;font-size:10px;font-weight:700;
+  background:#3ad29f;color:#06241a;border-radius:6px;padding:2px 7px;z-index:2}
 .cell .cutbtn{position:absolute;top:4px;left:50%;transform:translateX(-50%);font-size:11px;
   background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.35);color:#fff;border-radius:6px;
   padding:1px 6px;cursor:pointer;opacity:0}
