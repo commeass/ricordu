@@ -151,21 +151,21 @@ brew install ffmpeg python@3.12
 git clone https://github.com/commeass/ricordu.git
 cd ricordu
 python3.12 -m venv .venv && source .venv/bin/activate
-pip install mlx-vlm opencv-python imagehash scenedetect pillow-heif \
-            librosa Pillow numpy onnxruntime scikit-learn scipy \
-            huggingface_hub fastapi uvicorn
+pip install -r requirements.txt
 
-# 3. Télécharger le modèle VLM (~20 Go) dans un cache partagé
-export HF_HOME="$HOME/Models"
+# 3. Télécharger le modèle VLM (~20 Go)
 huggingface-cli download mlx-community/Qwen3.6-35B-A3B-4bit
 ```
 
 > ⚠️ Prenez bien la version **MLX** (pas le `.gguf`, incompatible avec `mlx-vlm`).
+>
+> 💡 `HF_HOME` est **optionnel** : par défaut, le cache Hugging Face standard (`~/.cache/huggingface`) est utilisé. Exportez `HF_HOME` avant le téléchargement et le lancement si vous préférez un autre emplacement (si `~/Models` existe, il est choisi automatiquement).
+>
+> 💡 `yt-dlp` est **optionnel** : `pip install yt-dlp` uniquement si vous voulez importer une musique depuis YouTube.
 
 **Lancer l'interface :**
 
 ```bash
-export HF_HOME="$HOME/Models"
 ./ui.sh          # ou : .venv/bin/uvicorn app:app --host 127.0.0.1 --port 8723
 ```
 

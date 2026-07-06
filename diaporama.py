@@ -13,7 +13,11 @@ import os, sys, json, argparse, subprocess, math, re, hashlib, tempfile, shutil
 from datetime import datetime
 
 # --- Modèles partagés ---
-os.environ.setdefault("HF_HOME", "/Users/jules/Models")
+# HF_HOME : on respecte la variable si déjà définie ; sinon ~/Models si le dossier existe ;
+# sinon on laisse le cache Hugging Face par défaut (~/.cache/huggingface).
+_models = os.path.expanduser("~/Models")
+if "HF_HOME" not in os.environ and os.path.isdir(_models):
+    os.environ["HF_HOME"] = _models
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 MODEL_DEFAULT = "mlx-community/Qwen3.6-35B-A3B-4bit"

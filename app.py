@@ -7,7 +7,7 @@ gère la bibliothèque musicale et suggère des musiques selon l'événement.
 Lancer :  ./ui.sh   (ou : .venv/bin/uvicorn app:app --port 8723)
 Tout tourne en local. Aucune donnée ne sort de la machine.
 """
-import os, sys, json, time, queue, threading, subprocess, io, re, shutil, asyncio
+import os, sys, json, time, queue, threading, subprocess, io, re, shutil, asyncio, secrets
 from urllib.parse import quote
 from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse, Response
@@ -19,19 +19,33 @@ RUN = os.path.join(BASE, "run")
 PROJECTS = os.path.join(BASE, "projects")
 os.makedirs(RUN, exist_ok=True)
 os.makedirs(PROJECTS, exist_ok=True)
-os.environ.setdefault("HF_HOME", "/Users/jules/Models")
+# HF_HOME : on respecte la variable si déjà définie ; sinon ~/Models si le dossier existe ;
+# sinon on laisse le cache Hugging Face par défaut (~/.cache/huggingface).
+_models = os.path.expanduser("~/Models")
+if "HF_HOME" not in os.environ and os.path.isdir(_models):
+    os.environ["HF_HOME"] = _models
 ENV = dict(os.environ)
 sys.path.insert(0, BASE)
 import diaporama as D
 
 app = FastAPI()
 
+# Jeton anti cross-site : posé en cookie SameSite=Lax sur la page, exigé sur les routes
+# fichiers (/api, /media, /music). Une page web tierce ne peut donc pas lire le disque
+# via <img src="http://127.0.0.1:8723/api/thumb?file=...">. Regénéré à chaque démarrage.
+TOKEN = secrets.token_hex(16)
+PROTECTED = ("/api/", "/media/", "/music/")
+
 @app.middleware("http")
 async def no_cache(request, call_next):
-    resp = await call_next(request)
     p = request.url.path
+    if p.startswith(PROTECTED) and request.cookies.get("ricordu") != TOKEN:
+        return Response("accès refusé (cookie manquant)", status_code=403)
+    resp = await call_next(request)
     if p.startswith("/api") or p in ("/", "/index.html", "/app.js", "/style.css"):
         resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    if p in ("/", "/index.html"):
+        resp.set_cookie("ricordu", TOKEN, samesite="lax", httponly=True, path="/")
     return resp
 
 # ----------------------------------------------------------------- état du job

@@ -1,0 +1,26 @@
+# Ricordu — dépendances Python (Mac Apple Silicon)
+# Serveur web
+fastapi>=0.136.3
+uvicorn>=0.48.0
+python-multipart>=0.0.29     # upload de musique (UploadFile)
+
+# IA locale (MLX) + modèles
+mlx-vlm>=0.5.0
+huggingface_hub>=1.17.0
+onnxruntime>=1.26.0          # détection de visages (pré-filtre CV)
+scikit-learn>=1.8.0          # clustering des scènes (DINOv2)
+
+# Images / vidéos
+Pillow>=12.2.0
+pillow-heif>=1.3.0           # photos HEIC/HEIF (iPhone)
+opencv-python>=4.13.0.92
+ImageHash>=4.3.2             # doublons (phash)
+scenedetect>=0.7             # découpage des plans vidéo
+
+# Audio / calcul
+librosa>=0.11.0              # analyse musicale (beats, tempo)
+numpy>=2.4.6
+scipy>=1.16.3
+
+# Optionnel : import de musique depuis YouTube
+# yt-dlp>=2026.3.17
