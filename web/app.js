@@ -183,19 +183,35 @@ $("#runBtn").onclick = () => {
   $("#progress").style.display="block"; $("#reports").innerHTML=""; $("#log").innerHTML="";
   $("#progress").scrollIntoView({behavior:"smooth"});
   fetch("/api/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(opts)})
-    .then(r=>r.json()).then(r=>{ if(r.error){ alert(r.error); resetRun(); } else listen(); });
+    .then(r=>r.json()).then(r=>{ if(r.error){ alert(r.error); resetRun(); } else { showCancel(); listen(); } });
 };
-function resetRun(){ $("#runBtn").disabled=false; $("#runBtn").textContent="Créer le montage"; }
+function resetRun(){   // réactive TOUS les boutons de lancement + cache Annuler
+  $("#runBtn").disabled=false; $("#runBtn").textContent="Créer le montage";
+  const c=$("#cancelBtn"); c.style.display="none"; c.disabled=false;
+  const r=$("#redo"); if(r){ r.disabled=false; r.textContent="Relancer le montage"; }
+}
+function showCancel(){ const c=$("#cancelBtn"); c.style.display="inline-block"; c.disabled=false; }
+$("#cancelBtn").onclick = () => {   // le serveur tue le sous-processus puis émet "cancelled"
+  $("#cancelBtn").disabled=true; $("#detail").textContent="Annulation…";
+  fetch("/api/cancel",{method:"POST"});
+};
 
 function setStep(stage,done){
   const map={scan:0,ai:1,render:2}; const ss=$("#stepper").children;
   [...ss].forEach((s,i)=>{ s.classList.remove("act","done");
     if(i<map[stage]||done) s.classList.add("done"); if(i===map[stage]&&!done) s.classList.add("act"); });
 }
-function listen(){
+function listen(resume){
   const es = new EventSource("/api/events");
   es.onmessage = e => {
     const ev = JSON.parse(e.data);
+    if(ev.type==="hello"){                       // reprise : un run lancé par un autre onglet ?
+      if(!resume) return;
+      if(ev.status!=="running"){ es.close(); return; }
+      $("#progress").style.display="block";
+      $("#runBtn").disabled=true; $("#runBtn").textContent="Montage en cours…"; showCancel();
+      return;
+    }
     if(ev.type==="stage") setStep(ev.stage,false);
     if(ev.type==="progress"){ $("#barFill").style.width=ev.value+"%"; $("#detail").textContent=ev.detail||""; }
     if(ev.type==="log"){ const l=$("#log"); l.innerHTML+=ev.line+"<br>"; l.scrollTop=l.scrollHeight; }
@@ -203,6 +219,7 @@ function listen(){
     if(ev.type==="done"){ setStep("render",true); $("#barFill").style.width="100%";
       $("#detail").textContent="Terminé ✓"; resetRun(); es.close(); loadSelection(); }
     if(ev.type==="error"){ $("#detail").textContent="Erreur : "+ev.message; resetRun(); es.close(); }
+    if(ev.type==="cancelled"){ $("#detail").textContent="Annulé"; resetRun(); es.close(); }
   };
 }
 
@@ -405,7 +422,7 @@ function redo(){
       order: state.manualOrder ? "manual" : state.order, order_ids,
       captions:state.captions, hardware_accel:state.hw, video_audio:state.videoAudio,
       scene_threshold_ai:state.sceneThr, music:[...state.selected]})})
-    .then(r=>r.json()).then(r=>{ if(r.error){alert(r.error);$("#redo").disabled=false;$("#redo").textContent="Relancer le montage";} else listen(); });
+    .then(r=>r.json()).then(r=>{ if(r.error){alert(r.error);$("#redo").disabled=false;$("#redo").textContent="Relancer le montage";} else { showCancel(); listen(); } });
 }
 
 // ---- projets ----
@@ -451,3 +468,4 @@ function loadProject(name){
 
 loadCatalog();
 loadProjects();
+listen(true);   // raccroche la progression si un montage tourne déjà (autre onglet)
