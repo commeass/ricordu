@@ -1298,7 +1298,10 @@ def build_segment(clip, idx, settings, workdir, dur_override=None):
         SW, SH = 2*W, 2*H                      # sur-échantillonnage 2x -> supprime le tremblement du zoompan
         zp = f"zoompan=z='{z}':d={frames}:x='{cx}':y='{cy}':s={W}x{H}:fps={fps}"
         out_ar = W / H                          # aspect de la SORTIE (16:9, 9:16 vertical, 1:1 carré…)
-        if settings.get("photo_fit", "auto") == "auto" and (ar < out_ar * 0.72 or ar > out_ar * 1.6):
+        # cadrage par photo : "fit" = entière sur fond flou, "fill" = plein cadre, sinon auto (ratio)
+        fit = clip.get("fit") if clip.get("fit") in ("fit", "fill") else None
+        auto_fit = settings.get("photo_fit", "auto") == "auto" and (ar < out_ar * 0.72 or ar > out_ar * 1.6)
+        if fit == "fit" or (fit is None and auto_fit):
             # aspect trop différent de la sortie (portrait sur 16:9, paysage sur 9:16…) :
             # photo ENTIÈRE sur fond flou, dans les deux sens (aucun rognage = aucun visage coupé)
             chain = (f"[0:v]split=2[s0][s1];"

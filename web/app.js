@@ -303,6 +303,8 @@ $("#addClip").onclick=()=>{
 };
 
 // ---- éditeur de sélection ----
+const FIT_LABEL = {auto:"⛶ cadrage", fit:"▭ entière", fill:"⛶ remplir"};   // cadrage par photo
+const FIT_NEXT  = {auto:"fit", fit:"fill", fill:"auto"};
 function loadSelection(){
   fetch("/api/selection").then(r=>r.json()).then(d=>{
     if(!d.clips || !d.clips.length){ $("#editor").innerHTML=""; return; }
@@ -325,11 +327,13 @@ function loadSelection(){
           <button class="vplay" data-src="${c.src}" data-start="${c.start}" data-dur="${c.dur}">▶</button>
           <button class="cutbtn" data-file="${esc(c.file)}" data-src="${c.src}">✂️ découper</button>`
         :`<button class="coverbtn" title="Choisir comme image de couverture (début + partage)">🖼️ couv.</button>
-          <button class="endbtn" title="Choisir comme photo de fin">🏁 fin</button>`}
+          <button class="endbtn" title="Choisir comme photo de fin">🏁 fin</button>
+          <button class="fitbtn ${c.fit&&c.fit!=='auto'?'set':''}" data-fit="${c.fit||'auto'}"
+            title="Cadrage : Auto (selon ratio) → Entière (fond flou, rien coupé) → Remplir (plein cadre)">${FIT_LABEL[c.fit||'auto']}</button>`}
         <span class="tick">✓</span></div>`).join("");
     $("#editor").innerHTML = `<div class="card">
       <h2>Sélection — clique pour inclure / exclure · glisse pour réordonner <span class="muted" id="selCount"></span></h2>
-      <div class="muted" style="margin-bottom:14px">Heure affichée sur chaque vignette. ▶ visionne l'extrait. <b>Glisse-dépose</b> une vignette pour changer l'ordre du montage. Ajuste puis relance.</div>
+      <div class="muted" style="margin-bottom:14px">Heure affichée sur chaque vignette. ▶ visionne l'extrait. <b>⛶</b> corrige le cadrage d'une photo (auto → entière sur fond flou → plein cadre). <b>Glisse-dépose</b> une vignette pour changer l'ordre du montage. Ajuste puis relance.</div>
       <div id="orderBanner" class="ordbanner" style="display:none">✋ <b>Ordre manuel</b> — le montage suivra l'ordre que tu as défini. <button class="btn" id="orderReset">↺ Ordre auto</button></div>
       ${dayChips}
       <div class="cells">${cells}</div>
@@ -346,6 +350,11 @@ function loadSelection(){
     });
     $("#editor").querySelectorAll(".endbtn").forEach(b=>b.onclick=ev=>{
       ev.stopPropagation(); markEndPhoto(b.closest(".cell").dataset.file);
+    });
+    $("#editor").querySelectorAll(".fitbtn").forEach(b=>b.onclick=ev=>{
+      ev.stopPropagation();
+      const f = FIT_NEXT[b.dataset.fit||"auto"];
+      b.dataset.fit = f; b.textContent = FIT_LABEL[f]; b.classList.toggle("set", f!=="auto");
     });
     $("#editor").querySelectorAll(".coverbtn").forEach(b=>b.onclick=ev=>{
       ev.stopPropagation(); markCoverPhoto(b.closest(".cell").dataset.file);
@@ -412,12 +421,13 @@ function markCoverPhoto(file){
 function redo(){
   const cells=[...document.querySelectorAll(".cell")];
   const inc={}; cells.forEach(el=>inc[el.dataset.id]=el.classList.contains("on"));
+  const fits={}; cells.forEach(el=>{ const b=el.querySelector(".fitbtn"); if(b) fits[el.dataset.id]=b.dataset.fit||"auto"; });
   const order_ids = cells.map(el=>+el.dataset.id);     // ordre actuel des vignettes
   $("#redo").disabled=true; $("#redo").textContent="Re-montage…";
   $("#reports").innerHTML=""; $("#progress").style.display="block"; setStep("render",false);
   $("#barFill").style.width="70%"; $("#progress").scrollIntoView({behavior:"smooth"});
   fetch("/api/reselect",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({includes:inc, title:$("#title").value.trim(),
+    body:JSON.stringify({includes:inc, fits, title:$("#title").value.trim(),
       end_text:$("#endtext").value.trim(), end_photo:state.endPhoto, cover_photo:state.coverPhoto,
       rhythm:state.rhythm, beats_per_clip:state.beats, format:state.format,
       order: state.manualOrder ? "manual" : state.order, order_ids,

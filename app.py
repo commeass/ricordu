@@ -414,9 +414,13 @@ def run_reselect(includes, opts):
             S["music_tracks"] = list(mf)
             mix = build_music_mix(mf, os.path.join(RUN, "music_mix.mp3")) if mf else None
             S["music"] = os.path.relpath(mix, BASE) if mix else None
+        fits = opts.get("fits") or {}          # cadrage par photo : {id: "auto"|"fit"|"fill"}
         for c in d["clips"]:
             cid = str(c.get("id"))
             if cid in includes: c["include"] = bool(includes[cid])
+            if cid in fits:
+                if fits[cid] in ("fit", "fill"): c["fit"] = fits[cid]
+                else: c.pop("fit", None)       # "auto" -> on rend la main à l'heuristique ratio
         if opts.get("order") == "manual" and opts.get("order_ids"):     # ordre manuel (glisser-déposer)
             rank = {str(i): n for n, i in enumerate(opts["order_ids"])}
             for c in d["clips"]:
@@ -673,6 +677,7 @@ def api_selection():
               "when": time.strftime("%d/%m %Hh%M", time.localtime(md)) if md else ""}
         if c["type"] == "photo":
             it["thumb"] = "/api/thumb?file=" + quote(c["file"])
+            it["fit"] = c.get("fit") if c.get("fit") in ("fit", "fill") else "auto"
         else:
             mid = c.get("trim_start", 0) + c.get("duration", 0) / 2
             it["thumb"] = f"/api/vthumb?file={quote(c['file'])}&t={mid:.2f}"
